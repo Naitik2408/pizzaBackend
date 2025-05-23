@@ -18,15 +18,13 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "MONGO_URI": "mongodb+srv://naitikkumar2408:KYZTIOkg7qwkmNt7@cluster0.d7s0lpr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+    "PORT": "5000",
+    "JWT_SECRET": "your_jwt_secret_key",
+    "RAZORPAY_KEY_ID": "rzp_test_your_key_id",
+    "RAZORPAY_KEY_SECRET": "your_secret_key"
   },
   "regions": ["bom1"],
-  "functions": {
-    "api/**/*.js": {
-      "memory": 1024,
-      "maxDuration": 10
-    }
-  },
   "headers": [
     {
       "source": "/api/(.*)",
@@ -37,12 +35,5 @@
         { "key": "Access-Control-Allow-Headers", "value": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization" }
       ]
     }
-  ],
-  "gitIgnore": [
-    "node_modules",
-    ".env",
-    ".env.local",
-    "npm-debug.log",
-    ".DS_Store"
   ]
 }
