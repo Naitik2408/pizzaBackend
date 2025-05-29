@@ -2,6 +2,7 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const MenuItem = require('../models/MenuItem');
 const Offer = require('../models/Offer');
+const { emitAllDeliveryAgentsStatus } = require('../utils/socket');
 // Import the getUserData function from userController
 const { getUserData } = require('./userController');
 // Import the assignDeliveryAgent function from orderController
@@ -351,14 +352,21 @@ const getDashboardStats = async (req, res) => {
 // Get all delivery agents
 const getDeliveryAgents = async (req, res) => {
   try {
-    const deliveryAgents = await User.find({ role: 'delivery' }).select('-password');
-    
-    // Use the getUserData function to format each delivery agent
-    const formattedAgents = deliveryAgents.map(agent => getUserData(agent, 'admin'));
-    
-    res.json(formattedAgents);
+    const agents = await User.find({
+      role: 'delivery',
+      'deliveryDetails.status': 'approved'
+    }).select('name email deliveryDetails createdAt');
+
+    // Get Socket.IO instance
+    const io = req.app.get('io');
+
+    // Emit current status to all admins
+    emitAllDeliveryAgentsStatus(io, agents);
+
+    res.json(agents);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Error retrieving delivery agents:', error);
+    res.status(500).json({ message: 'Failed to retrieve delivery agents' });
   }
 };
 
@@ -399,10 +407,10 @@ const getAllUsers = async (req, res) => {
   try {
     // Exclude password field for security
     const users = await User.find().select('-password');
-    
+
     // Use the shared function to format each user with admin permissions
     const formattedUsers = users.map(user => getUserData(user, 'admin'));
-    
+
     res.json(formattedUsers);
   } catch (error) {
     console.error('Error fetching users:', error);
@@ -560,11 +568,11 @@ const deleteOffer = async (req, res) => {
 const getUserById = async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select('-password');
-    
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
+
     // Use the shared getUserData function with admin permissions
     const userData = getUserData(user, 'admin');
     return res.json(userData);
@@ -578,32 +586,32 @@ const getUserById = async (req, res) => {
 const updateDeliveryVerification = async (req, res) => {
   try {
     const { status, verificationNotes } = req.body;
-    
+
     if (!status || !['approved', 'rejected'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status value' });
     }
-    
+
     const user = await User.findById(req.params.id);
-    
+
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
+
     if (user.role !== 'delivery') {
       return res.status(400).json({ message: 'User is not a delivery partner' });
     }
-    
+
     // Update verification status
     user.deliveryDetails.status = status;
     user.deliveryDetails.isVerified = status === 'approved';
-    
+
     // Add verification notes if provided
     if (verificationNotes) {
       user.deliveryDetails.verificationNotes = verificationNotes;
     }
-    
+
     await user.save();
-    
+
     // Use the shared function to return consistent user data
     const userData = getUserData(user, 'admin');
     res.json(userData);

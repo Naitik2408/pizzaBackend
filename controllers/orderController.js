@@ -2,6 +2,12 @@ const Order = require('../models/Order');
 const User = require('../models/User');
 const asyncHandler = require('express-async-handler');
 const { processOrderPayment } = require('./transactionController');
+const { sendNewOrderNotification } = require('../utils/notifications');
+// Add socket utility import
+const { 
+  emitOrderStatusUpdate, 
+  emitDeliveryAgentAssignment 
+} = require('../utils/socket');
 
 // Utility function for fetching and formatting orders by query
 // This can be used by all controllers that need to retrieve orders
@@ -429,6 +435,15 @@ const placeOrder = asyncHandler(async (req, res) => {
   });
 
   const createdOrder = await order.save();
+
+  // Emit socket event for new order
+  const io = req.app.get('io');
+  if (io) {
+    emitOrderStatusUpdate(io, createdOrder, 'new_order');
+  }
+
+  await sendNewOrderNotification(createdOrder); 
+
   res.status(201).json(createdOrder);
 });
 
@@ -526,6 +541,12 @@ const cancelMyOrder = asyncHandler(async (req, res) => {
 
   const updatedOrder = await order.save();
 
+  // Emit socket event for order cancellation
+  const io = req.app.get('io');
+  if (io) {
+    emitOrderStatusUpdate(io, updatedOrder, 'cancelled');
+  }
+
   res.json({
     success: true,
     order: {
@@ -578,6 +599,12 @@ const rateOrder = asyncHandler(async (req, res) => {
   });
 
   const updatedOrder = await order.save();
+
+  // Emit socket event for order rating
+  const io = req.app.get('io');
+  if (io) {
+    emitOrderStatusUpdate(io, updatedOrder, 'rated');
+  }
 
   res.json({
     success: true,
@@ -702,6 +729,9 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     }
     // Admin and restaurant roles can update to any status
 
+    // Store previous status for socket event
+    const previousStatus = order.status;
+
     // Update the order status
     order.status = status;
 
@@ -723,6 +753,19 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
 
     // Save the updated order
     const updatedOrder = await order.save();
+
+    // Get Socket.IO instance and emit status update
+    const io = req.app.get('io');
+    if (io) {
+      emitOrderStatusUpdate(io, updatedOrder, 'status_change', {
+        previousStatus,
+        updatedBy: {
+          role: userRole,
+          id: userId,
+          name: req.user.name
+        }
+      });
+    }
 
     // Log the status change
     console.log(`Order ${orderId} status updated to ${status} by ${userRole} ${req.user.name}`);
@@ -766,6 +809,12 @@ const assignDeliveryAgent = asyncHandler(async (req, res) => {
     res.status(404);
     throw new Error('Order not found');
   }
+
+  // Store previous assignment for socket event
+  const previousAssignment = {
+    deliveryAgentId: order.deliveryAgent,
+    deliveryAgentName: order.deliveryAgentName
+  };
 
   // If setting to unassigned
   if (deliveryAgentName === 'Unassigned') {
@@ -812,6 +861,19 @@ const assignDeliveryAgent = asyncHandler(async (req, res) => {
   }
 
   const updatedOrder = await order.save();
+
+  // Emit socket event for delivery agent assignment
+  const io = req.app.get('io');
+  if (io) {
+    emitDeliveryAgentAssignment(io, updatedOrder, {
+      previousAssignment,
+      assignedBy: {
+        id: req.user._id,
+        name: req.user.name,
+        role: req.user.role
+      }
+    });
+  }
 
   res.json({
     success: true,
@@ -1294,7 +1356,7 @@ module.exports = {
   
   // Unified status and payment functions
   updateOrderStatus,
-  updateOrderPayment,  // Now just a wrapper around processOrderPayment
+  updateOrderPayment,
   assignDeliveryAgent,
   
   // Delivery agent functions - consolidated from deliveryController
