@@ -10,6 +10,8 @@ connectDB();
 // Create HTTP server using Express app
 const server = http.createServer(app);
 
+// this is just to restart the server
+
 // Initialize Socket.IO with CORS config
 const io = socketIo(server, {
   cors: {
