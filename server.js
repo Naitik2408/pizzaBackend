@@ -15,11 +15,15 @@ const server = http.createServer(app);
 // Initialize Socket.IO with CORS config
 const io = socketIo(server, {
   cors: {
-    origin: "*", // In production, restrict this to your frontend URL
+    origin: "*",  // In production, restrict this to your frontend URL
     methods: ["GET", "POST"],
     allowedHeaders: ["my-custom-header"],
     credentials: true
-  }
+  },
+  // Add these lines for better WebSocket handling on various infrastructures:
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,  // Allows compatibility mode with older clients
+  pingTimeout: 30000 // Increase ping timeout for unreliable connections
 });
 
 // Add Socket.IO instance to app for controller access
@@ -28,24 +32,24 @@ app.set('io', io);
 // Socket connection handling
 io.on('connection', (socket) => {
   console.log(`New client connected: ${socket.id}`);
-  
+
   // Join rooms based on role
   socket.on('join', (data) => {
     const { userId, role } = data;
-    
+
     if (userId) {
       // Join user-specific room
       socket.join(`user:${userId}`);
-      
+
       // Join role-based room
       if (role) {
         socket.join(`role:${role}`);
       }
-      
+
       console.log(`Socket ${socket.id} joined rooms for user ${userId}, role ${role}`);
     }
   });
-  
+
   // Handle disconnection
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);
