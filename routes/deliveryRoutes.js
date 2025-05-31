@@ -1,5 +1,6 @@
 const express = require('express');
 const { protect, delivery } = require('../middleware/authMiddleware');
+const orderController = require('../controllers/orderController');
 const { 
   // getAssignedOrders,
   getOrderDetails,
@@ -14,7 +15,7 @@ const {
 const router = express.Router();
 
 // Get all orders assigned to the logged in delivery agent
-// router.get('/orders/assigned', protect, delivery, getAssignedOrders);
+router.get('/orders/assigned', protect, delivery, orderController.getAssignedDeliveryOrders);
 
 // Get completed orders history
 router.get('/orders/completed', protect, delivery, getCompletedOrders);
