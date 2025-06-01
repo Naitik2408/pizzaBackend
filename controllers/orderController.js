@@ -4,280 +4,264 @@ const asyncHandler = require('express-async-handler');
 const { processOrderPayment } = require('./transactionController');
 const { sendNewOrderNotification } = require('../utils/notifications');
 // Add socket utility import
-const { 
-  emitOrderStatusUpdate, 
-  emitDeliveryAgentAssignment 
+const {
+  emitOrderStatusUpdate,
+  emitDeliveryAgentAssignment
 } = require('../utils/socket');
 
-// Utility function for fetching and formatting orders by query
-// This can be used by all controllers that need to retrieve orders
+// Update the getOrdersByQuery function with better error handling
 const getOrdersByQuery = async (query, options = {}) => {
-  const {
-    pagination = false,
-    page = 1,
-    pageSize = 10,
-    sort = { createdAt: -1 },
-    formatType = 'default',
-    populate = []
-  } = options;
+  try {
+    const {
+      pagination = false,
+      page = 1,
+      pageSize = 10,
+      sort = { createdAt: -1 },
+      formatType = 'default',
+      populate = []
+    } = options;
 
-  let ordersQuery = Order.find(query);
+    let ordersQuery = Order.find(query);
 
-  // Apply population if needed
-  if (populate.length > 0) {
-    populate.forEach(field => {
-      ordersQuery = ordersQuery.populate(field.path, field.select);
+    // Apply population if needed
+    if (populate.length > 0) {
+      populate.forEach(field => {
+        ordersQuery = ordersQuery.populate(field.path, field.select);
+      });
+    }
+
+    // Apply sorting
+    ordersQuery = ordersQuery.sort(sort);
+
+    // Apply pagination if requested
+    if (pagination) {
+      const skip = pageSize * (page - 1);
+      ordersQuery = ordersQuery.skip(skip).limit(pageSize);
+    }
+
+    // Execute the query with a timeout to prevent hanging connections
+    const orders = await ordersQuery.exec();
+
+    // If no orders found, return appropriate response instead of empty array
+    if (!orders || orders.length === 0) {
+      return pagination ? { orders: [], page, pages: 0, total: 0 } : [];
+    }
+
+    // Count total documents if pagination is requested
+    let count = null;
+    if (pagination) {
+      count = await Order.countDocuments(query);
+    }
+
+    // Format orders based on requested format type
+    const formattedOrders = orders.map(order => {
+      try {
+        // Base order format shared across all views
+        const baseFormat = {
+          id: order.orderNumber,
+          _id: order._id,
+          status: order.status,
+          date: order.getFormattedDate ? order.getFormattedDate() : (order.date || new Date(order.createdAt).toISOString().split('T')[0]),
+          time: order.time || new Date(order.createdAt).toLocaleTimeString().slice(0, 5),
+          createdAt: order.createdAt,
+          amount: order.amount || 0,
+          paymentMethod: order.paymentMethod || 'Not specified',
+          paymentStatus: order.paymentStatus || 'Not specified',
+        };
+
+        // Return appropriate format based on format type
+        if (formatType === 'customer') {
+          return {
+            ...baseFormat,
+            orderNumber: order.orderNumber,
+            items: Array.isArray(order.items) ? order.items.map(item => ({
+              menuItemId: item.menuItemId,
+              name: item.name || "Unnamed Item",
+              quantity: item.quantity || 1,
+              price: item.price || 0,
+              size: item.size || '',
+              foodType: item.foodType || '',
+              image: item.image || '',
+              customizations: Array.isArray(item.customizations) ? item.customizations : [],
+              addOns: Array.isArray(item.addOns) ? item.addOns : [],
+              toppings: Array.isArray(item.toppings) ? item.toppings : [],
+              specialInstructions: item.specialInstructions || '',
+              hasCustomizations: !!(
+                (item.customizations && item.customizations.length) ||
+                (item.addOns && item.addOns.length) ||
+                (item.toppings && item.toppings.length) ||
+                item.specialInstructions
+              ),
+              totalPrice: (item.totalItemPrice || item.price || 0) * (item.quantity || 1)
+            })) : [],
+            fullAddress: order.fullAddress || '',
+            address: order.address || {},
+            deliveryAgent: order.deliveryAgent ? {
+              _id: order.deliveryAgent,
+              name: order.deliveryAgentName || 'Assigned',
+              phone: '' // This would need to come from populating the delivery agent
+            } : null,
+            statusUpdates: Array.isArray(order.statusUpdates) ? order.statusUpdates.map(update => ({
+              status: update.status,
+              time: update.time,
+              note: update.note
+            })) : [],
+            estimatedDeliveryTime: order.estimatedDeliveryTime,
+            notes: order.notes || '',
+            subTotal: order.subTotal || 0,
+            tax: order.tax || 0,
+            deliveryFee: order.deliveryFee || 0,
+            discounts: order.discounts || {}
+          };
+        }
+
+        // Delivery agent view format
+        else if (formatType === 'delivery') {
+          return {
+            ...baseFormat,
+            customer: {
+              name: order.customerName || 'Customer',
+              contact: order.customerPhone || 'No contact'
+            },
+            address: order.fullAddress || '',
+            fullAddress: order.fullAddress || '',
+            customerPhone: order.customerPhone || '',
+            items: Array.isArray(order.items) ? order.items.map(item => ({
+              name: item.name || "Unnamed Item",
+              quantity: item.quantity || 1,
+              price: item.price || 0,
+              size: item.size || "Regular",
+              foodType: item.foodType || "Not Applicable",
+              image: item.image || ''
+            })) : [],
+            totalItems: order.totalItemsCount || (Array.isArray(order.items) ?
+              order.items.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0),
+            notes: order.notes || '',
+            estimatedDeliveryTime: order.estimatedDeliveryTime,
+            totalPrice: order.amount || 0,
+            subtotal: order.subTotal || order.subtotal ||
+              (Array.isArray(order.items) ?
+                order.items.reduce((sum, item) =>
+                  sum + ((item.price || 0) * (item.quantity || 1)), 0) : 0),
+            tax: order.tax || 0,
+            deliveryFee: order.deliveryFee || 0,
+            deliveryAddress: {
+              street: order.address?.street || '',
+              city: order.address?.city || '',
+              country: order.address?.country || 'India',
+              notes: order.address?.notes || order.notes || ''
+            },
+            pickupLocation: {
+              name: order.restaurant?.name || 'Restaurant',
+              address: order.restaurant?.address || 'Restaurant Address'
+            },
+            distance: order.distance || '2.5 km',
+            statusUpdates: Array.isArray(order.statusUpdates) ? order.statusUpdates : []
+          };
+        }
+
+        // Default format (minimal)
+        else {
+          return {
+            ...baseFormat,
+            customer: order.customerName || 'Customer',
+            deliveryAgent: order.deliveryAgentName || 'Unassigned',
+            totalItemsCount: order.totalItemsCount || (Array.isArray(order.items) ?
+              order.items.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0),
+            address: order.fullAddress || ''
+          };
+        }
+      } catch (formatError) {
+        console.error('Error formatting order:', formatError);
+        // Return minimal data if formatting fails
+        return {
+          _id: order._id,
+          id: order.orderNumber || order._id,
+          status: order.status || 'Processing',
+          date: order.date || new Date(order.createdAt).toISOString().split('T')[0],
+          error: 'Error formatting order data'
+        };
+      }
+    });
+
+    // Return formatted result
+    if (pagination) {
+      return {
+        orders: formattedOrders,
+        page,
+        pages: Math.ceil(count / pageSize),
+        total: count
+      };
+    }
+
+    return formattedOrders;
+  } catch (error) {
+    console.error('Error in getOrdersByQuery:', error);
+    // Return safe fallback values instead of throwing error
+    if (pagination) {
+      return { orders: [], page: options.page || 1, pages: 0, total: 0 };
+    }
+    return [];
+  }
+};
+
+// Update the getMyOrders function with proper null checks
+const getMyOrders = asyncHandler(async (req, res) => {
+  try {
+    // Check if user exists in request
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({
+        message: 'User not authenticated or session expired',
+        orders: [] // Return empty array so frontend won't crash
+      });
+    }
+
+    const query = { customer: req.user._id };
+    const options = {
+      formatType: 'customer',
+      sort: { createdAt: -1 }
+    };
+
+    const formattedOrders = await getOrdersByQuery(query, options);
+
+    // Successful response with empty array if no orders
+    res.json(formattedOrders);
+  } catch (error) {
+    console.error('Error fetching user orders:', error);
+    // Send error response but don't crash the server
+    res.status(500).json({
+      message: 'Failed to fetch orders',
+      error: error.message,
+      orders: [] // Return empty array so frontend won't crash
     });
   }
+});
 
-  // Apply sorting
-  ordersQuery = ordersQuery.sort(sort);
-
-  // Apply pagination if requested
-  if (pagination) {
-    const skip = pageSize * (page - 1);
-    ordersQuery = ordersQuery.skip(skip).limit(pageSize);
-  }
-
-  // Execute the query
-  const orders = await ordersQuery;
-  
-  // Count total documents if pagination is requested
-  let count = null;
-  if (pagination) {
-    count = await Order.countDocuments(query);
-  }
-  
-  // Format orders based on requested format type
-  const formattedOrders = orders.map(order => {
-    // Base order format shared across all views
-    const baseFormat = {
-      id: order.orderNumber,
-      _id: order._id,
-      status: order.status,
-      date: order.getFormattedDate(),
-      time: order.time,
-      createdAt: order.createdAt,
-      amount: order.amount,
-      paymentMethod: order.paymentMethod,
-      paymentStatus: order.paymentStatus,
+// Update the getAssignedDeliveryOrders function with better error handling
+const getAssignedDeliveryOrders = asyncHandler(async (req, res) => {
+  try {
+    const query = {
+      deliveryAgent: req.user._id,
+      status: { $nin: ['Delivered', 'Cancelled'] }
     };
-    
-    // Customer view format
-    if (formatType === 'customer') {
-      return {
-        ...baseFormat,
-        orderNumber: order.orderNumber,
-        items: order.items.map(item => ({
-          menuItemId: item.menuItemId,
-          name: item.name,
-          quantity: item.quantity,
-          price: item.price,
-          size: item.size,
-          foodType: item.foodType,
-          image: item.image || '', // Added image field to customer view
-          customizations: item.customizations || [],
-          addOns: item.addOns || [],
-          toppings: item.toppings || [],
-          specialInstructions: item.specialInstructions || '',
-          hasCustomizations: !!(
-            (item.customizations && item.customizations.length) ||
-            (item.addOns && item.addOns.length) ||
-            (item.toppings && item.toppings.length) ||
-            item.specialInstructions
-          ),
-          totalPrice: (item.totalItemPrice || item.price) * item.quantity
-        })),
-        fullAddress: order.fullAddress,
-        address: order.address,
-        deliveryAgent: order.deliveryAgent ? {
-          _id: order.deliveryAgent,
-          name: order.deliveryAgentName,
-          phone: '' // This would need to come from populating the delivery agent
-        } : null,
-        statusUpdates: order.statusUpdates.map(update => ({
-          status: update.status,
-          time: update.time,
-          note: update.note
-        })),
-        estimatedDeliveryTime: order.estimatedDeliveryTime,
-        notes: order.notes,
-        subTotal: order.subTotal,
-        tax: order.tax,
-        deliveryFee: order.deliveryFee,
-        discounts: order.discounts
-      };
-    }
-    
-    // Delivery agent view format
-    else if (formatType === 'delivery') {
-      return {
-        ...baseFormat,
-        customer: {
-          name: order.customerName,
-          contact: order.customerPhone
-        },
-        address: order.fullAddress,
-        fullAddress: order.fullAddress,
-        customerPhone: order.customerPhone,
-        items: order.items.map(item => ({
-          name: item.name || "Unnamed Item",
-          quantity: item.quantity || 1,
-          price: item.price || 0,
-          size: item.size || "Regular",
-          foodType: item.foodType || "Not Applicable",
-          image: item.image || '' // Added image for delivery agents too
-        })),
-        totalItems: order.totalItemsCount || order.items.reduce((sum, item) => sum + (item.quantity || 1), 0),
-        notes: order.notes || '',
-        estimatedDeliveryTime: order.estimatedDeliveryTime,
-        // Add fields used in deliveryController
-        totalPrice: order.amount,
-        deliveryAddress: {
-          street: order.address?.street || '',
-          city: order.address?.city || '',
-          country: order.address?.country || 'India',
-          notes: order.address?.notes || order.notes || ''
-        },
-        pickupLocation: {
-          name: order.restaurant?.name || 'Restaurant',
-          address: order.restaurant?.address || 'Restaurant Address'
-        },
-        distance: order.distance || '2.5 km',
-        statusUpdates: order.statusUpdates || []
-      };
-    }
-    
-    // Delivery agent completed orders format
-    else if (formatType === 'deliveryCompleted') {
-      // Calculate commission (20% of order amount)
-      const commission = (order.amount * 0.2).toFixed(2);
-      
-      return {
-        id: order.orderNumber || order._id,
-        _id: order._id,
-        date: order.createdAt.toISOString().split('T')[0],
-        time: order.createdAt.toTimeString().split(' ')[0].slice(0, 5),
-        customerName: order.customerName,
-        items: order.items.map(item => ({
-          name: item.name,
-          quantity: item.quantity,
-          price: item.price
-        })),
-        total: order.amount,
-        commission: parseFloat(commission),
-        deliveryDuration: order.deliveryDuration || '25 min',
-        rating: order.rating || 5,
-        feedback: order.feedback || '',
-        customerImage: 'https://images.unsplash.com/photo-1568602471122-7832951cc4c5?w=100'
-      };
-    }
-    
-    // Admin view format
-    else if (formatType === 'admin') {
-      return {
-        ...baseFormat,
-        customer: order.customerName,
-        deliveryAgent: order.deliveryAgentName,
-        items: order.items.map(item => ({
-          name: item.name || "Unnamed Item",
-          quantity: item.quantity || 1,
-          price: item.price || 0,
-          size: item.size || "Regular",
-          foodType: item.foodType || "Not Applicable",
-          image: item.image || '', // Added image field
-          customizations: item.customizations || [],
-          addOns: item.addOns || [],
-          toppings: item.toppings || [],
-          hasCustomizations: !!(
-            (item.customizations && item.customizations.length) ||
-            (item.addOns && item.addOns.length) ||
-            (item.toppings && item.toppings.length) ||
-            item.specialInstructions
-          ),
-          // Count total customizations
-          customizationCount:
-            (item.customizations ? item.customizations.length : 0) +
-            (item.addOns ? item.addOns.length : 0) +
-            (item.toppings ? item.toppings.length : 0) +
-            (item.specialInstructions ? 1 : 0)
-        })),
-        totalItemsCount: order.totalItemsCount || order.items.reduce((sum, item) => sum + (item.quantity || 1), 0),
-        address: order.fullAddress,
-        customerPhone: order.customerPhone,
-        notes: order.notes || ''
-      };
-    }
-    
-    // Admin detail view format
-    else if (formatType === 'adminDetail') {
-      return {
-        _id: order._id,
-        orderNumber: order.orderNumber,
-        customerName: order.customerName,
-        status: order.status,
-        date: order.date,
-        time: order.time || new Date(order.date).toLocaleTimeString(),
-        amount: order.amount,
-        items: order.items.map(item => ({
-          name: item.name || "Unnamed Item",
-          quantity: item.quantity || 1,
-          price: item.price || 0,
-          basePrice: item.basePrice || item.price || 0,
-          size: item.size || "Regular",
-          foodType: item.foodType || "Not Applicable",
-          image: item.image || '', // Added image field
-          customizations: Array.isArray(item.customizations) ? item.customizations : [],
-          addOns: Array.isArray(item.addOns) ? item.addOns : [],
-          toppings: Array.isArray(item.toppings) ? item.toppings : [],
-          specialInstructions: item.specialInstructions || "",
-          totalItemPrice: item.totalItemPrice || item.price || 0,
-          menuItemId: item.menuItemId || "",
-          // Calculate customization total
-          customizationTotal: [
-            ...(item.customizations || []),
-            ...(item.addOns || []),
-            ...(item.toppings || [])
-          ].reduce((sum, customization) => sum + (customization.price || 0), 0)
-        })),
-        fullAddress: order.fullAddress,
-        paymentMethod: order.paymentMethod || "Not specified",
-        paymentStatus: order.paymentStatus || "Not specified",
-        customerPhone: order.customerPhone || "Not available",
-        notes: order.notes || "",
-        deliveryAgentName: order.deliveryAgentName,
-        statusUpdates: order.statusUpdates || [],
-        subTotal: order.subTotal,
-        tax: order.tax,
-        deliveryFee: order.deliveryFee,
-        discounts: order.discounts
-      };
-    }
-    
-    // Default format (minimal)
-    else {
-      return {
-        ...baseFormat,
-        customer: order.customerName,
-        deliveryAgent: order.deliveryAgentName,
-        totalItemsCount: order.totalItemsCount || order.items.reduce((sum, item) => sum + (item.quantity || 1), 0),
-        address: order.fullAddress
-      };
-    }
-  });
-  
-  // Return formatted result
-  if (pagination) {
-    return {
-      orders: formattedOrders,
-      page,
-      pages: Math.ceil(count / pageSize),
-      total: count
+
+    const options = {
+      formatType: 'delivery',
+      sort: { createdAt: -1 }
     };
+
+    const formattedOrders = await getOrdersByQuery(query, options);
+    res.json(formattedOrders);
+  } catch (error) {
+    console.error('Error fetching assigned delivery orders:', error);
+    // Send error response but don't crash the server
+    res.status(500).json({
+      message: 'Failed to fetch assigned orders',
+      error: error.message,
+      orders: [] // Return empty array so frontend won't crash
+    });
   }
-  
-  return formattedOrders;
-};
+});
 
 // @desc    Place a new order
 // @route   POST /api/orders
@@ -383,9 +367,9 @@ const placeOrder = asyncHandler(async (req, res) => {
           option: topping.option || topping.name || '',
           price: Number(topping.price || 0)
         }));
-        
+
         // Add prices from toppings
-        totalItemPrice += processedToppings.reduce((sum, topping) => 
+        totalItemPrice += processedToppings.reduce((sum, topping) =>
           sum + (topping.price || 0), 0);
       }
     }
@@ -442,29 +426,12 @@ const placeOrder = asyncHandler(async (req, res) => {
     emitOrderStatusUpdate(io, createdOrder, 'new_order');
   }
 
-  await sendNewOrderNotification(createdOrder); 
+  await sendNewOrderNotification(createdOrder);
 
   res.status(201).json(createdOrder);
 });
 
-// @desc    Get logged in user's orders
-// @route   GET /api/orders/my-orders
-// @access  Private
-const getMyOrders = asyncHandler(async (req, res) => {
-  try {
-    const query = { customer: req.user._id };
-    const options = {
-      formatType: 'customer',
-      sort: { createdAt: -1 }
-    };
-    
-    const formattedOrders = await getOrdersByQuery(query, options);
-    res.json(formattedOrders);
-  } catch (error) {
-    console.error('Error fetching user orders:', error);
-    res.status(500).json({ message: 'Failed to fetch orders' });
-  }
-});
+
 
 // @desc    Get order by ID for logged in user
 // @route   GET /api/orders/my-orders/:id
@@ -562,7 +529,7 @@ const cancelMyOrder = asyncHandler(async (req, res) => {
 // @access  Private
 const rateOrder = asyncHandler(async (req, res) => {
   const { rating, comment } = req.body;
-  
+
   if (!rating || rating < 1 || rating > 5) {
     res.status(400);
     throw new Error('Rating must be between 1 and 5');
@@ -590,7 +557,7 @@ const rateOrder = asyncHandler(async (req, res) => {
   // Add rating to order
   order.rating = rating;
   order.reviewComment = comment || '';
-  
+
   // Add note to status updates
   order.statusUpdates.push({
     status: order.status,
@@ -619,7 +586,7 @@ const getOrders = asyncHandler(async (req, res) => {
   try {
     const pageSize = 10;
     const page = Number(req.query.page) || 1;
-    
+
     const query = {};
     const options = {
       pagination: true,
@@ -628,7 +595,7 @@ const getOrders = asyncHandler(async (req, res) => {
       formatType: 'admin',
       sort: { createdAt: -1 }
     };
-    
+
     const result = await getOrdersByQuery(query, options);
     res.json(result);
   } catch (error) {
@@ -646,19 +613,19 @@ const getOrderById = asyncHandler(async (req, res) => {
       { path: 'customer', select: 'name email' },
       { path: 'deliveryAgent', select: 'name' }
     ];
-    
+
     const options = {
       formatType: 'adminDetail',
       populate
     };
-    
+
     const orders = await getOrdersByQuery({ _id: req.params.id }, options);
-    
+
     if (!orders || orders.length === 0) {
       res.status(404);
       throw new Error('Order not found');
     }
-    
+
     res.json(orders[0]);
   } catch (error) {
     console.error('Error fetching order details:', error);
@@ -682,7 +649,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
   try {
     // Find the order
     const order = await Order.findById(orderId);
-    
+
     if (!order) {
       res.status(404);
       throw new Error('Order not found');
@@ -695,32 +662,32 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
         res.status(403);
         throw new Error('Customers can only cancel orders');
       }
-      
+
       if (order.customer.toString() !== userId.toString()) {
         res.status(403);
         throw new Error('Not authorized to update this order');
       }
-      
+
       // Check if order is in a cancellable state
       if (order.status !== 'Pending' && order.status !== 'Preparing') {
         res.status(400);
         throw new Error('Order cannot be cancelled at this stage');
       }
-    } 
+    }
     else if (userRole === 'delivery') {
       // Delivery agents can only update orders assigned to them
       if (order.deliveryAgent?.toString() !== userId.toString()) {
         res.status(403);
         throw new Error('Not authorized - this order is not assigned to you');
       }
-      
+
       // Delivery agents can only update to specific statuses
       const allowedStatuses = ['Out for delivery', 'Delivered'];
       if (!allowedStatuses.includes(status)) {
         res.status(400);
         throw new Error('Delivery agents can only update to Out for delivery or Delivered status');
       }
-      
+
       // If setting to Delivered, check if payment is completed for COD orders
       if (status === 'Delivered' && order.paymentMethod === 'Cash on Delivery' && order.paymentStatus !== 'Completed') {
         res.status(400);
@@ -783,7 +750,7 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating order status:', error);
-    
+
     // Return a specific error code and message
     if (error.message.includes('Not authorized') || error.message.includes('can only')) {
       res.status(403).json({ message: error.message });
@@ -898,20 +865,20 @@ const updateOrderPayment = asyncHandler(async (req, res) => {
       status: req.body.status,
       note: req.body.note
     };
-    
+
     // We don't create a transaction record by default in the order route
     const createTransactionRecord = false;
-    
+
     // Call the central payment processing function in transactionController
     const result = await processOrderPayment(orderId, paymentData, req.user, createTransactionRecord);
-    
+
     res.json(result);
   } catch (error) {
     console.error('Error updating payment status:', error);
-    
+
     const statusCode = error.statusCode || 500;
     const message = error.message || 'Failed to update payment status';
-    
+
     res.status(statusCode).json({ message });
   }
 });
@@ -923,22 +890,22 @@ const filterOrders = asyncHandler(async (req, res) => {
   try {
     const { status, date, deliveryAgent } = req.query;
     const filterOptions = {};
-    
+
     if (status) {
       filterOptions.status = status;
     }
-    
+
     if (date) {
       // Convert date string to Date object range for the whole day
       const startDate = new Date(date);
       startDate.setHours(0, 0, 0, 0);
-      
+
       const endDate = new Date(date);
       endDate.setHours(23, 59, 59, 999);
-      
+
       filterOptions.date = { $gte: startDate, $lte: endDate };
     }
-    
+
     if (deliveryAgent) {
       if (deliveryAgent === 'Unassigned') {
         filterOptions.deliveryAgentName = 'Unassigned';
@@ -946,10 +913,10 @@ const filterOrders = asyncHandler(async (req, res) => {
         filterOptions.deliveryAgentName = deliveryAgent;
       }
     }
-    
+
     const pageSize = 10;
     const page = Number(req.query.page) || 1;
-    
+
     const options = {
       pagination: true,
       page,
@@ -957,7 +924,7 @@ const filterOrders = asyncHandler(async (req, res) => {
       formatType: 'admin',
       sort: { createdAt: -1 }
     };
-    
+
     const result = await getOrdersByQuery(filterOptions, options);
     res.json(result);
   } catch (error) {
@@ -972,11 +939,11 @@ const filterOrders = asyncHandler(async (req, res) => {
 const searchOrders = asyncHandler(async (req, res) => {
   try {
     const { query } = req.query;
-    
+
     if (!query) {
       return res.status(400).json({ message: 'Search query is required' });
     }
-    
+
     // Search by order number, customer name, or item name
     const searchQuery = {
       $or: [
@@ -985,14 +952,14 @@ const searchOrders = asyncHandler(async (req, res) => {
         { 'items.name': { $regex: query, $options: 'i' } }
       ]
     };
-    
+
     const options = {
       pagination: false,
       formatType: 'admin',
       sort: { createdAt: -1 },
       limit: 20
     };
-    
+
     const formattedOrders = await getOrdersByQuery(searchQuery, options);
     res.json(formattedOrders);
   } catch (error) {
@@ -1003,29 +970,6 @@ const searchOrders = asyncHandler(async (req, res) => {
 
 // CENTRALIZED DELIVERY FUNCTIONS
 // These functions consolidate functionality from deliveryController.js
-
-// @desc    Get orders assigned to the delivery agent
-// @route   GET /api/orders/delivery/assigned
-// @access  Private/Delivery
-const getAssignedDeliveryOrders = asyncHandler(async (req, res) => {
-  try {
-    const query = {
-      deliveryAgent: req.user._id,
-      status: { $nin: ['Delivered', 'Cancelled'] }
-    };
-    
-    const options = {
-      formatType: 'delivery',
-      sort: { createdAt: -1 }
-    };
-    
-    const formattedOrders = await getOrdersByQuery(query, options);
-    res.json(formattedOrders);
-  } catch (error) {
-    console.error('Error fetching assigned delivery orders:', error);
-    res.status(500).json({ message: 'Failed to fetch assigned orders' });
-  }
-});
 
 // @desc    Get completed orders for delivery agent
 // @route   GET /api/orders/delivery/completed
@@ -1050,12 +994,12 @@ const getCompletedDeliveryOrders = asyncHandler(async (req, res) => {
       status: 'Delivered',
       ...dateFilter
     };
-    
+
     const options = {
       formatType: 'deliveryCompleted',
       sort: { createdAt: -1 }
     };
-    
+
     const formattedOrders = await getOrdersByQuery(query, options);
     res.json(formattedOrders);
   } catch (error) {
@@ -1198,7 +1142,7 @@ const getDeliveryDashboard = asyncHandler(async (req, res) => {
 
     const formattedRecent = recentDeliveries.map(order => ({
       id: order.orderNumber || order._id,
-      _id: order._id, 
+      _id: order._id,
       customer: order.customerName,
       date: order.createdAt.toISOString().split('T')[0],
       amount: order.amount,
@@ -1242,7 +1186,7 @@ const getDeliveryOrderDetails = asyncHandler(async (req, res) => {
       { _id: order._id },
       { formatType: 'delivery' }
     );
-    
+
     if (orders && orders.length > 0) {
       res.json(orders[0]);
     } else {
@@ -1271,7 +1215,7 @@ const getOrdersPendingPayment = asyncHandler(async (req, res) => {
       paymentStatus: 'Pending',
       status: { $in: ['Out for delivery', 'Delivered'] }
     };
-    
+
     const orders = await Order.find(query).sort({ createdAt: -1 });
 
     // Format orders for frontend
@@ -1304,23 +1248,23 @@ const getDeliveryOrders = asyncHandler(async (req, res) => {
 const getAssignedOrders = asyncHandler(async (req, res) => {
   try {
     const { agentId } = req.params;
-    
+
     // Validate agent exists
     const agent = await User.findById(agentId);
     if (!agent) {
       return res.status(404).json({ message: 'Delivery agent not found' });
     }
-    
+
     const query = {
       deliveryAgent: agentId,
       status: { $in: ['Preparing', 'Out for delivery'] }
     };
-    
+
     const options = {
       formatType: 'admin',
       sort: { createdAt: -1 }
     };
-    
+
     const formattedOrders = await getOrdersByQuery(query, options);
     res.json(formattedOrders);
   } catch (error) {
@@ -1340,25 +1284,25 @@ const getDeliveryOrderById = asyncHandler(async (req, res) => {
 module.exports = {
   // Order query utility
   getOrdersByQuery,
-  
+
   // Customer-facing order functions
   placeOrder,
   getMyOrders,
   getMyOrderById,
   cancelMyOrder,
   rateOrder,
-  
+
   // Admin order management
   getOrders,
   getOrderById,
   filterOrders,
   searchOrders,
-  
+
   // Unified status and payment functions
   updateOrderStatus,
   updateOrderPayment,
   assignDeliveryAgent,
-  
+
   // Delivery agent functions - consolidated from deliveryController
   getDeliveryOrders,
   getDeliveryOrderById,
