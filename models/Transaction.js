@@ -42,6 +42,26 @@ const transactionSchema = new mongoose.Schema({
       default: null
     }
   },
+  // Added Razorpay payment details
+  razorpayDetails: {
+    paymentId: {
+      type: String,
+      default: null
+    },
+    orderId: {
+      type: String,
+      default: null
+    },
+    signature: {
+      type: String,
+      default: null
+    },
+    verificationStatus: {
+      type: String,
+      enum: ['Pending', 'Verified', 'Failed'],
+      default: 'Pending'
+    }
+  },
   confirmedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -75,6 +95,9 @@ transactionSchema.index({ customer: 1 });
 transactionSchema.index({ transactionDate: 1 });
 transactionSchema.index({ status: 1 });
 transactionSchema.index({ orderNumber: 1 });
+// Add index for Razorpay payment ID for fast lookups
+transactionSchema.index({ 'razorpayDetails.paymentId': 1 });
+transactionSchema.index({ 'razorpayDetails.orderId': 1 });
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
 

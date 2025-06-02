@@ -6,7 +6,9 @@ const {
   getTransactions,
   getDeliveryTransactions,
   getTransactionById,
-  getTransactionsByDateRange
+  getTransactionsByDateRange,
+  createRazorpayOrder,
+  verifyRazorpayPayment
 } = require('../controllers/transactionController');
 
 // Create transaction - delivery agent only
@@ -17,6 +19,14 @@ router.get('/', protect, admin, getTransactions);
 
 // Get transactions by date range - admin only
 router.get('/date-range', protect, admin, getTransactionsByDateRange);
+
+// Add these routes:
+
+// Create a Razorpay order
+router.post('/create-razorpay-order', protect, createRazorpayOrder);
+
+// Verify Razorpay payment
+router.post('/verify-payment', protect, verifyRazorpayPayment);
 
 // Get transactions by delivery agent - delivery agent access
 router.get('/delivery', protect, delivery, getDeliveryTransactions);

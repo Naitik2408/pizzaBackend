@@ -1,6 +1,7 @@
 const Transaction = require('../models/Transaction');
 const Order = require('../models/Order');
 const asyncHandler = require('express-async-handler');
+const Razorpay = require('razorpay');
 
 /**
  * Central function for processing order payments and optionally creating transactions
@@ -13,7 +14,7 @@ const asyncHandler = require('express-async-handler');
 const processOrderPayment = async (orderId, paymentData, user, createTransactionRecord = false) => {
   // Find the order
   const order = await Order.findById(orderId);
-  
+
   if (!order) {
     const error = new Error('Order not found');
     error.statusCode = 404;
@@ -71,8 +72,8 @@ const processOrderPayment = async (orderId, paymentData, user, createTransaction
   }
 
   // If status is provided and user is delivery agent or admin, update order status too
-  if (status && ['Preparing', 'Out for delivery', 'Delivered'].includes(status) && 
-      (user.role === 'delivery' || user.role === 'admin')) {
+  if (status && ['Preparing', 'Out for delivery', 'Delivered'].includes(status) &&
+    (user.role === 'delivery' || user.role === 'admin')) {
     order.status = status;
   }
 
@@ -139,27 +140,142 @@ const updateOrderPayment = asyncHandler(async (req, res) => {
       merchantCode: req.body.merchantCode,
       upiReference: req.body.upiReference
     };
-    
+
     // Determine if we should create a transaction record
     // Create a transaction when payment is Completed for COD/UPI payments
-    const createTransactionRecord = req.body.createTransaction || 
-                                   (paymentData.paymentStatus === 'Completed' && 
-                                   (req.user.role === 'delivery' && 
-                                   (req.body.paymentMethod === 'Cash on Delivery' || 
-                                    req.body.paymentMethod === 'UPI')));
-    
+    const createTransactionRecord = req.body.createTransaction ||
+      (paymentData.paymentStatus === 'Completed' &&
+        (req.user.role === 'delivery' &&
+          (req.body.paymentMethod === 'Cash on Delivery' ||
+            req.body.paymentMethod === 'UPI')));
+
     const result = await processOrderPayment(orderId, paymentData, req.user, createTransactionRecord);
-    
+
     res.json(result);
   } catch (error) {
     console.error('Error updating payment status:', error);
-    
+
     const statusCode = error.statusCode || 500;
     const message = error.message || 'Failed to update payment status';
-    
+
     res.status(statusCode).json({ message });
   }
 });
+
+
+// Create these two new functions:
+
+// @desc    Create a Razorpay order
+// @route   POST /api/transactions/create-razorpay-order
+// @access  Private
+const createRazorpayOrder = asyncHandler(async (req, res) => {
+  try {
+    const { amount, currency, receipt } = req.body;
+
+    // Initialize Razorpay instance
+    const instance = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID,
+      key_secret: process.env.RAZORPAY_KEY_SECRET
+    });
+
+    const options = {
+      amount: amount, // amount in smallest currency unit (paise)
+      currency: currency || 'INR',
+      receipt: receipt || `receipt_${Date.now()}`,
+      notes: {
+        userId: req.user._id.toString(),
+        purpose: "Food Order"
+      }
+    };
+
+    const order = await instance.orders.create(options);
+    res.json(order);
+  } catch (error) {
+    console.error("Error creating Razorpay order:", error);
+    res.status(500).json({
+      message: "Could not create payment order",
+      error: error.message
+    });
+  }
+});
+
+// @desc    Verify Razorpay payment
+// @route   POST /api/transactions/verify-payment
+// @access  Private
+const verifyRazorpayPayment = asyncHandler(async (req, res) => {
+  try {
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
+
+    // Generate signature for verification
+    const crypto = require('crypto');
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
+      .update(body.toString())
+      .digest('hex');
+
+    // Verify signature
+    const isAuthentic = expectedSignature === razorpay_signature;
+
+    if (isAuthentic) {
+      // Create a transaction record and update order
+      // This uses your existing function with payment details
+      const paymentData = {
+        paymentStatus: 'Completed',
+        paymentMethod: 'Online',
+        paymentDetails: {
+          razorpay_payment_id,
+          razorpay_order_id,
+          razorpay_signature,
+          verificationStatus: 'Verified'
+        },
+        note: 'Payment verified through Razorpay'
+      };
+
+      // Extract orderId from custom notes if available
+      // Or you can pass orderId in request body
+      let orderId = req.body.orderId;
+      if (!orderId) {
+        // Get order details from Razorpay to find your internal orderId
+        const instance = new Razorpay({
+          key_id: process.env.RAZORPAY_KEY_ID,
+          key_secret: process.env.RAZORPAY_KEY_SECRET
+        });
+
+        const razorpayOrder = await instance.orders.fetch(razorpay_order_id);
+        // You could store orderId in notes during order creation
+        if (razorpayOrder.notes && razorpayOrder.notes.orderId) {
+          orderId = razorpayOrder.notes.orderId;
+        }
+      }
+
+      if (orderId) {
+        // Use your existing function to process the payment
+        const result = await processOrderPayment(
+          orderId,
+          paymentData,
+          req.user,
+          true // Create a transaction record
+        );
+        return res.json({ verified: true, ...result });
+      } else {
+        // If no orderId is found, just return verification status
+        return res.json({ verified: true });
+      }
+    } else {
+      res.status(400).json({ verified: false });
+    }
+  } catch (error) {
+    console.error("Error verifying payment:", error);
+    res.status(500).json({
+      message: "Payment verification failed",
+      error: error.message
+    });
+  }
+});
+
+
+
 
 // @desc    Create a transaction record (legacy support)
 // @route   POST /api/transactions
@@ -167,24 +283,24 @@ const updateOrderPayment = asyncHandler(async (req, res) => {
 const createTransaction = asyncHandler(async (req, res) => {
   try {
     const { orderId, upiReference, notes } = req.body;
-    
+
     // Use the unified function with payment completion
     const paymentData = {
       paymentStatus: 'Completed',
       note: notes,
       upiReference
     };
-    
+
     // Always create transaction record for this endpoint
     const result = await processOrderPayment(orderId, paymentData, req.user, true);
-    
+
     res.status(201).json(result);
   } catch (error) {
     console.error('Error creating transaction:', error);
-    
+
     const statusCode = error.statusCode || 500;
     const message = error.message || 'Failed to create transaction';
-    
+
     res.status(statusCode).json({ message });
   }
 });
@@ -195,13 +311,13 @@ const createTransaction = asyncHandler(async (req, res) => {
 const getTransactions = asyncHandler(async (req, res) => {
   const pageSize = 10;
   const page = Number(req.query.page) || 1;
-  
+
   const count = await Transaction.countDocuments({});
   const transactions = await Transaction.find({})
     .sort({ createdAt: -1 })
     .skip(pageSize * (page - 1))
     .limit(pageSize);
-  
+
   res.json({
     transactions,
     page,
@@ -216,13 +332,13 @@ const getTransactions = asyncHandler(async (req, res) => {
 const getDeliveryTransactions = asyncHandler(async (req, res) => {
   const pageSize = 10;
   const page = Number(req.query.page) || 1;
-  
+
   const count = await Transaction.countDocuments({ confirmedBy: req.user._id });
   const transactions = await Transaction.find({ confirmedBy: req.user._id })
     .sort({ createdAt: -1 })
     .skip(pageSize * (page - 1))
     .limit(pageSize);
-  
+
   res.json({
     transactions,
     page,
@@ -239,12 +355,12 @@ const getTransactionById = asyncHandler(async (req, res) => {
     .populate('order', 'orderNumber status items amount')
     .populate('confirmedBy', 'name email')
     .populate('customer', 'name email');
-  
+
   if (!transaction) {
     res.status(404);
     throw new Error('Transaction not found');
   }
-  
+
   res.json(transaction);
 });
 
@@ -253,27 +369,27 @@ const getTransactionById = asyncHandler(async (req, res) => {
 // @access  Private/Admin
 const getTransactionsByDateRange = asyncHandler(async (req, res) => {
   const { startDate, endDate } = req.query;
-  
+
   if (!startDate || !endDate) {
     res.status(400);
     throw new Error('Start date and end date are required');
   }
-  
+
   const start = new Date(startDate);
   start.setHours(0, 0, 0, 0);
-  
+
   const end = new Date(endDate);
   end.setHours(23, 59, 59, 999);
-  
+
   const transactions = await Transaction.find({
     transactionDate: { $gte: start, $lte: end }
   }).sort({ transactionDate: 1 });
-  
+
   // Calculate total amount
   const totalAmount = transactions.reduce((sum, transaction) => {
     return sum + transaction.amount;
   }, 0);
-  
+
   res.json({
     transactions,
     totalAmount,
@@ -290,7 +406,11 @@ module.exports = {
   processOrderPayment,
   updateOrderPayment,
   createTransaction,
-  
+
+  // Razorpay-specific functions
+  createRazorpayOrder,
+  verifyRazorpayPayment,
+
   // Transaction retrieval functions
   getTransactions,
   getDeliveryTransactions,
