@@ -238,6 +238,8 @@ const emitPaymentUpdate = (io, order) => {
     io.to('role:admin').emit('order_update', paymentUpdate);
     
     // Also emit specific payment event to admin for revenue tracking
+
+    // just to restart the server
     io.to('role:admin').emit('payment_received', paymentUpdate);
     
     // Emit to the customer who placed the order
