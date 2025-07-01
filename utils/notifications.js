@@ -43,17 +43,26 @@ const sendRoleNotification = async (role, notification) => {
 };
 
 /**
- * Send notification for a new order
+ * Send system-level alarm notification for a new order
  * @param {Object} order - Order object
  * @returns {Promise<Object>} - Response from notification service
  */
 const sendNewOrderNotification = async (order) => {
   const notification = {
-    title: 'New Order Received!',
-    body: `${order.customerName} placed order #${order.orderNumber} - ₹${order.amount}`,
+    title: '🚨 NEW ORDER ALERT! 🚨',
+    body: `URGENT: ${order.customerName || 'Customer'} placed order #${order.orderNumber || order._id.slice(-6)} - ₹${order.amount}`,
     data: { 
       orderId: order._id.toString(),
-      type: 'new_order' 
+      orderNumber: order.orderNumber || order._id.slice(-6),
+      customerName: order.customerName || 'Customer',
+      amount: order.amount.toString(),
+      type: 'new_order_alarm',
+      priority: 'max',
+      timestamp: Date.now().toString(),
+      // System-level alert flags
+      systemAlert: 'true',
+      fullScreen: 'true',
+      callLike: 'true'
     }
   };
   
@@ -74,13 +83,44 @@ const sendExpoNotifications = async (tokens, notification) => {
     
     const messages = tokens.map(token => ({
       to: token,
-      sound: 'default',
+      sound: 'notification_sound.wav', // Custom alarm sound
       title: notification.title,
       body: notification.body,
       data: notification.data || {},
       badge: 1,
-      priority: 'high', // For faster delivery when app is in background
-      channelId: 'orders', // Android notification channel
+      priority: 'max', // Maximum priority for system alerts
+      channelId: notification.data?.fullScreen ? 'full_screen_alerts' : 'order_alerts',
+      // System-level notification properties
+      _displayInForeground: true,
+      categoryId: 'ORDER_ALERT',
+      subtitle: 'Immediate Action Required',
+      // Android-specific properties for call-like behavior
+      android: {
+        priority: 'max',
+        sticky: true,
+        autoDismiss: false,
+        ongoing: true,
+        fullScreenIntent: notification.data?.fullScreen === 'true',
+        timeoutAfter: 60000, // 60 seconds
+        actions: [
+          {
+            title: 'View Order',
+            icon: 'ic_action_view',
+            identifier: 'view_order'
+          },
+          {
+            title: 'Dismiss',
+            icon: 'ic_action_dismiss', 
+            identifier: 'dismiss_alert'
+          }
+        ]
+      },
+      // iOS-specific properties for critical alerts
+      ios: {
+        critical: true,
+        criticalVolume: 1.0,
+        interruptionLevel: 'critical'
+      }
     }));
     
     console.log('Sending push notifications to tokens:', tokens);
