@@ -57,7 +57,7 @@ const sendNewOrderNotification = async (order) => {
       customerName: order.customerName || 'Customer',
       amount: order.amount.toString(),
       type: 'new_order_alarm',
-      priority: 'max',
+      priority: 'high',
       timestamp: Date.now().toString(),
       // System-level alert flags
       systemAlert: 'true',
@@ -88,7 +88,7 @@ const sendExpoNotifications = async (tokens, notification) => {
       body: notification.body,
       data: notification.data || {},
       badge: 1,
-      priority: 'max', // Maximum priority for system alerts
+      priority: 'high', // Maximum priority for system alerts
       channelId: notification.data?.fullScreen ? 'full_screen_alerts' : 'order_alerts',
       // System-level notification properties
       _displayInForeground: true,
@@ -96,7 +96,7 @@ const sendExpoNotifications = async (tokens, notification) => {
       subtitle: 'Immediate Action Required',
       // Android-specific properties for call-like behavior
       android: {
-        priority: 'max',
+        priority: 'high',
         sticky: true,
         autoDismiss: false,
         ongoing: true,
