@@ -41,6 +41,7 @@ const orderSchema = mongoose.Schema(
         price: { type: Number, required: true },
         size: { type: String, enum: ['Small', 'Medium', 'Large', 'Not Applicable'] },
         foodType: { type: String, enum: ['Veg', 'Non-Veg', 'Not Applicable'] },
+        image: { type: String }, // Add image field for menu item images
         // Original customizations field (keeping for backward compatibility)
         customizations: [customizationSchema],
         // New fields for the enhanced customization system
@@ -120,11 +121,26 @@ const orderSchema = mongoose.Schema(
     discounts: {
       code: { type: String },
       amount: { type: Number, default: 0 },
-      percentage: { type: Number }
+      percentage: { type: Number },
+      description: { type: String } // Added description for discount details
     },
     subTotal: { type: Number }, // Amount before tax, delivery fee, discounts
-    tax: { type: Number },
-    deliveryFee: { type: Number, default: 0 }
+    tax: { type: Number, default: 0 },
+    taxPercentage: { type: Number, default: 0 }, // Store the tax percentage applied
+    deliveryFee: { type: Number, default: 0 },
+    // Business settings applied at the time of order
+    appliedBusinessSettings: {
+      taxSettings: {
+        gstPercentage: { type: Number },
+        applyGST: { type: Boolean }
+      },
+      deliveryCharges: {
+        fixedCharge: { type: Number },
+        freeDeliveryThreshold: { type: Number },
+        applyToAllOrders: { type: Boolean }
+      },
+      minimumOrderValue: { type: Number }
+    }
   },
   { timestamps: true }
 );
@@ -182,15 +198,53 @@ orderSchema.pre('save', async function(next) {
       this.subTotal = this.items.reduce((sum, item) => sum + (item.totalItemPrice || item.price) * item.quantity, 0);
     }
     
-    // If no tax is set but we have a subtotal, estimate the tax
+    // Calculate tax based on business settings if available
     if (!this.tax && this.subTotal) {
-      // Estimate tax at 5% (modify according to your tax rate)
-      this.tax = Math.round(this.subTotal * 0.05 * 100) / 100;
+      // Use applied business settings if available, otherwise default to 5%
+      let taxRate = 0.05; // Default 5%
+      
+      if (this.appliedBusinessSettings && 
+          this.appliedBusinessSettings.taxSettings && 
+          this.appliedBusinessSettings.taxSettings.applyGST) {
+        taxRate = (this.appliedBusinessSettings.taxSettings.gstPercentage || 5) / 100;
+        this.taxPercentage = this.appliedBusinessSettings.taxSettings.gstPercentage || 5;
+      } else {
+        this.taxPercentage = 5; // Default 5%
+      }
+      
+      this.tax = Math.round(this.subTotal * taxRate * 100) / 100;
     }
     
-    // If amount is not set, calculate it
+    // Calculate delivery fee based on business settings if available
+    if (this.deliveryFee === undefined || this.deliveryFee === null) {
+      let deliveryCharge = 40; // Default delivery charge
+      
+      if (this.appliedBusinessSettings && this.appliedBusinessSettings.deliveryCharges) {
+        const deliverySettings = this.appliedBusinessSettings.deliveryCharges;
+        
+        if (deliverySettings.applyToAllOrders) {
+          // Apply delivery charge to all orders
+          deliveryCharge = deliverySettings.fixedCharge || 40;
+        } else {
+          // Apply delivery charge only if order is below free delivery threshold
+          if (this.subTotal < (deliverySettings.freeDeliveryThreshold || 500)) {
+            deliveryCharge = deliverySettings.fixedCharge || 40;
+          } else {
+            deliveryCharge = 0; // Free delivery
+          }
+        }
+      }
+      
+      this.deliveryFee = deliveryCharge;
+    }
+    
+    // Calculate final amount
     if (!this.amount) {
-      this.amount = (this.subTotal || 0) + (this.tax || 0) + (this.deliveryFee || 0) - ((this.discounts && this.discounts.amount) || 0);
+      const discountAmount = (this.discounts && this.discounts.amount) || 0;
+      this.amount = (this.subTotal || 0) + (this.tax || 0) + (this.deliveryFee || 0) - discountAmount;
+      
+      // Ensure amount is not negative
+      this.amount = Math.max(0, this.amount);
     }
     
     // Calculate total items count
@@ -205,17 +259,26 @@ orderSchema.methods.getFormattedDate = function() {
   return date.toISOString().split('T')[0]; // YYYY-MM-DD format
 };
 
-// Add a method to get order summary
+// Add a method to get order summary with complete pricing breakdown
 orderSchema.methods.getSummary = function() {
   return {
     id: this.orderNumber,
     _id: this._id,
     customer: this.customerName,
+    customerName: this.customerName, // Added for consistency
     status: this.status,
     deliveryAgent: this.deliveryAgentName,
     date: this.getFormattedDate(),
     time: this.time,
+    // Complete pricing breakdown
+    subtotal: this.subTotal || 0,
+    deliveryFee: this.deliveryFee || 0,
+    tax: this.tax || 0,
+    taxPercentage: this.taxPercentage || 0,
+    discount: (this.discounts && this.discounts.amount) || 0,
+    discountCode: (this.discounts && this.discounts.code) || null,
     amount: this.amount,
+    total: this.amount, // Alias for amount
     itemCount: this.totalItemsCount,
     items: this.items.map(item => ({
       name: item.name,
@@ -223,14 +286,83 @@ orderSchema.methods.getSummary = function() {
       price: item.price,
       size: item.size,
       foodType: item.foodType,
+      basePrice: item.basePrice || item.price,
+      totalItemPrice: item.totalItemPrice || item.price,
       totalPrice: (item.totalItemPrice || item.price) * item.quantity,
+      customizations: item.customizations || [],
+      addOns: item.addOns || [],
+      toppings: item.toppings || [],
+      specialInstructions: item.specialInstructions,
       hasCustomizations: !!(
         (item.customizations && item.customizations.length) || 
         (item.addOns && item.addOns.length) || 
         (item.toppings && item.toppings.length) ||
         item.specialInstructions
       )
-    }))
+    })),
+    // Additional order details for delivery agent
+    paymentMethod: this.paymentMethod,
+    paymentStatus: this.paymentStatus,
+    address: this.address,
+    fullAddress: this.fullAddress,
+    customerPhone: this.customerPhone,
+    notes: this.notes,
+    // Business settings applied at order time
+    appliedBusinessSettings: this.appliedBusinessSettings
+  };
+};
+
+// Add a method to get delivery completion summary for completed orders
+orderSchema.methods.getDeliveryCompletionSummary = function() {
+  // Calculate delivery duration (mock data for now, you can implement actual tracking)
+  const deliveryDuration = "25-30 min"; // This should be calculated from actual delivery time
+  
+  // Mock rating (you can implement actual rating system)
+  const rating = Math.floor(Math.random() * 2) + 4; // Random rating between 4-5
+  
+  // Mock feedback (you can implement actual feedback system)
+  const feedbacks = [
+    "Great delivery service!",
+    "Food was hot and fresh",
+    "Quick delivery, thank you!",
+    "Excellent service",
+    "",
+    "",
+    "" // More empty strings to make feedback less frequent
+  ];
+  const feedback = feedbacks[Math.floor(Math.random() * feedbacks.length)];
+  
+  // Calculate commission (example: 10% of order total)
+  const commission = Math.round(this.amount * 0.10 * 100) / 100;
+  
+  return {
+    id: this.orderNumber,
+    _id: this._id,
+    date: this.date,
+    time: this.time,
+    customerName: this.customerName,
+    items: this.items.map(item => ({
+      name: item.name,
+      quantity: item.quantity,
+      price: item.totalItemPrice || item.price,
+      size: item.size,
+      foodType: item.foodType,
+      customizations: item.customizations || [],
+      addOns: item.addOns || [],
+      toppings: item.toppings || []
+    })),
+    // Complete pricing breakdown for transparency
+    subtotal: this.subTotal || 0,
+    deliveryFee: this.deliveryFee || 0,
+    tax: this.tax || 0,
+    discount: (this.discounts && this.discounts.amount) || 0,
+    total: this.amount,
+    // Delivery specific information
+    commission: commission,
+    deliveryDuration: deliveryDuration,
+    rating: rating,
+    feedback: feedback,
+    customerImage: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=100' // Default image
   };
 };
 

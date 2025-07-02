@@ -43,7 +43,7 @@ const addMenuItem = async (req, res) => {
   const {
     name, description, price, category, image,
     available, popular, foodType, size,
-    sizeVariations, rating, sizeType, hasMultipleSizes,
+    sizeVariations, sizeType, hasMultipleSizes,
     hasAddOns, addOnGroups
   } = req.body;
 
@@ -59,7 +59,6 @@ const addMenuItem = async (req, res) => {
       foodType,
       size: size || 'Medium', // Default size
       sizeType: sizeType || 'single', // Use the explicit sizeType
-      rating: rating || 0,
       // Add size variations if provided
       sizeVariations: sizeType === 'multiple' ? sizeVariations : []
     };

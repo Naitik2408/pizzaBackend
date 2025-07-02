@@ -1,5 +1,6 @@
 const Order = require('../models/Order');
 const User = require('../models/User');
+const Business = require('../models/Business');
 const asyncHandler = require('express-async-handler');
 const { processOrderPayment } = require('./transactionController');
 const { sendNewOrderNotification } = require('../utils/notifications');
@@ -213,6 +214,19 @@ const getOrdersByQuery = async (query, options = {}) => {
           };
         }
 
+        // Delivery completed format (uses the model's getDeliveryCompletionSummary method)
+        else if (formatType === 'deliveryCompleted') {
+          const completionSummary = order.getDeliveryCompletionSummary ? order.getDeliveryCompletionSummary() : {};
+          return {
+            ...baseFormat,
+            ...completionSummary,
+            customer: {
+              name: order.customerName || 'Customer',
+              contact: order.customerPhone || 'No contact'
+            }
+          };
+        }
+
         // Default format (minimal)
         else {
           return {
@@ -341,6 +355,19 @@ const placeOrder = asyncHandler(async (req, res) => {
   // Get user details for customer info
   const user = await User.findById(req.user._id);
 
+  // Fetch current business settings to save with the order
+  const businessSettings = await Business.findOne().select(
+    'taxSettings deliveryCharges minimumOrderValue'
+  );
+
+  // Calculate tax percentage - use from business settings or calculate from provided values
+  let taxPercentage = 0;
+  if (businessSettings && businessSettings.taxSettings && businessSettings.taxSettings.gstPercentage) {
+    taxPercentage = businessSettings.taxSettings.gstPercentage;
+  } else if (tax && subTotal && subTotal > 0) {
+    taxPercentage = (tax / subTotal) * 100;
+  }
+
   // Process items to ensure they have all required fields and calculate totals
   const processedItems = items.map(item => {
     // Extract the base price (before customizations)
@@ -467,8 +494,14 @@ const placeOrder = asyncHandler(async (req, res) => {
     deliveryAgentName: 'Unassigned',
     subTotal: subTotal || processedItems.reduce((sum, item) => sum + (item.totalItemPrice * item.quantity), 0),
     tax,
+    taxPercentage,
     deliveryFee,
-    discounts
+    discounts: typeof discounts === 'object' ? discounts : { amount: discounts || 0, description: 'Discount applied' },
+    appliedBusinessSettings: businessSettings ? {
+      taxSettings: businessSettings.taxSettings || { gstPercentage: 0, applyGST: false },
+      deliveryCharges: businessSettings.deliveryCharges || { fixedCharge: 0, freeDeliveryThreshold: 0, applyToAllOrders: false },
+      minimumOrderValue: businessSettings.minimumOrderValue || 0
+    } : null
   });
 
   const createdOrder = await order.save();

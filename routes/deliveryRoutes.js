@@ -5,7 +5,6 @@ const {
   // getAssignedOrders,
   getOrderDetails,
   // updateOrderStatus,
-  getCompletedOrders,
   getDeliveryStats,
   getDeliveryDashboard, 
   getOrdersPendingPayment,
@@ -18,7 +17,7 @@ const router = express.Router();
 router.get('/orders/assigned', protect, delivery, orderController.getAssignedDeliveryOrders);
 
 // Get completed orders history
-router.get('/orders/completed', protect, delivery, getCompletedOrders);
+router.get('/orders/completed', protect, delivery, orderController.getCompletedDeliveryOrders);
 
 // Add this new route BEFORE the parameterized route
 router.get('/orders/pending-payments', protect, delivery, getOrdersPendingPayment);
