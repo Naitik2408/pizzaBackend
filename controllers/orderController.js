@@ -160,6 +160,59 @@ const getOrdersByQuery = async (query, options = {}) => {
           };
         }
 
+        // Admin detail view format  
+        else if (formatType === 'adminDetail') {
+          return {
+            ...baseFormat,
+            orderNumber: order.orderNumber,
+            customerName: order.customerName || 'Customer',
+            customer: order.customerName || 'Customer',
+            deliveryAgent: order.deliveryAgentName || 'Unassigned',
+            deliveryAgentName: order.deliveryAgentName || 'Unassigned',
+            customerPhone: order.customerPhone || '',
+            fullAddress: order.fullAddress || '',
+            address: order.address || {},
+            notes: order.notes || '',
+            subTotal: order.subTotal || 0,
+            tax: order.tax || 0,
+            deliveryFee: order.deliveryFee || 0,
+            discounts: order.discounts || 0,
+            totalItemsCount: order.totalItemsCount || (Array.isArray(order.items) ?
+              order.items.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0),
+            items: Array.isArray(order.items) ? order.items.map(item => ({
+              menuItemId: item.menuItemId,
+              name: item.name || "Unnamed Item",
+              quantity: item.quantity || 1,
+              price: item.price || 0,
+              basePrice: item.basePrice || item.price || 0,
+              size: item.size || 'Regular',
+              foodType: item.foodType || 'Not Applicable',
+              image: item.image || '',
+              customizations: Array.isArray(item.customizations) ? item.customizations : [],
+              addOns: Array.isArray(item.addOns) ? item.addOns : [],
+              toppings: Array.isArray(item.toppings) ? item.toppings : [],
+              specialInstructions: item.specialInstructions || '',
+              totalItemPrice: item.totalItemPrice || item.price || 0,
+              hasCustomizations: !!(
+                (item.customizations && item.customizations.length) ||
+                (item.addOns && item.addOns.length) ||
+                (item.toppings && item.toppings.length) ||
+                item.specialInstructions
+              ),
+              customizationCount: (
+                (item.customizations ? item.customizations.length : 0) +
+                (item.addOns ? item.addOns.length : 0) +
+                (item.toppings ? item.toppings.length : 0)
+              )
+            })) : [],
+            statusUpdates: Array.isArray(order.statusUpdates) ? order.statusUpdates.map(update => ({
+              status: update.status,
+              time: update.time,
+              note: update.note
+            })) : []
+          };
+        }
+
         // Default format (minimal)
         else {
           return {
