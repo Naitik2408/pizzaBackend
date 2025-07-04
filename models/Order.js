@@ -150,8 +150,22 @@ orderSchema.pre('save', async function(next) {
   if (!this.orderNumber) {
     const date = new Date();
     const year = date.getFullYear();
-    const count = await mongoose.models.Order.countDocuments({}) + 1;
-    this.orderNumber = `${count.toString().padStart(4, '0')}`;
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    
+    // Count orders for today to generate sequential number
+    const todayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const todayEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+    
+    const todayOrdersCount = await mongoose.models.Order.countDocuments({
+      createdAt: { $gte: todayStart, $lt: todayEnd }
+    });
+    
+    const dailySequence = (todayOrdersCount + 1).toString().padStart(3, '0');
+    
+    // Generate a unique order number: PZ + YYYYMMDD + DailySequence
+    // Example: PZ202407040001, PZ202407040002, etc.
+    this.orderNumber = `PZ${year}${month}${day}${dailySequence}`;
     
     // Add initial status update
     if (!this.statusUpdates || this.statusUpdates.length === 0) {

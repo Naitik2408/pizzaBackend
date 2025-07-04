@@ -354,10 +354,11 @@ const getOrdersPendingPayment = asyncHandler(async (req, res) => {
 
     // Format orders for frontend
     const formattedOrders = orders.map(order => ({
-        id: order.orderNumber,
+        id: order.orderNumber || order._id,
         _id: order._id,
         amount: order.amount,
         customerName: order.customerName,
+        customerPhone: order.customerPhone,
         date: order.createdAt.toISOString().split('T')[0],
         time: order.time || order.createdAt.toTimeString().split(' ')[0].slice(0, 5)
     }));
