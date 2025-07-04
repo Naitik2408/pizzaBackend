@@ -12,6 +12,7 @@ const transactionRoutes = require('./routes/transactionRoutes'); // Add this lin
 const deviceTokenRoutes = require('./routes/deviceTokenRoutes');
 const businessRoutes = require('./routes/businessRoutes');
 const offerRoutes = require('./routes/offerRoutes')
+const publicRoutes = require('./routes/publicRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
 app.use(express.json());
@@ -21,6 +22,9 @@ app.use(cors());
 app.get('/', (req, res) => {
   res.send('Welcome to the Pizza API');
 });
+
+// Public routes (no auth required)
+app.use('/api', publicRoutes);
 
 // app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);

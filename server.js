@@ -3,6 +3,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const connectDB = require('./config/db');
 const dotenv = require('dotenv');
+const BusinessSettings = require('./models/Business');
 dotenv.config();
 
 connectDB();
@@ -28,6 +29,38 @@ const io = socketIo(server, {
 
 // Add Socket.IO instance to app for controller access
 app.set('io', io);
+
+// Function to check and update business status
+const updateBusinessStatus = async () => {
+  try {
+    const settings = await BusinessSettings.findOrCreate();
+    
+    // Only update if manual override is not active
+    if (!settings.businessInfo.manualOverride.isActive) {
+      const isOpen = settings.isBusinessOpen();
+      const currentStatus = settings.businessInfo.isCurrentlyOpen;
+      
+      // If status changed, update and emit event
+      if (isOpen !== currentStatus) {
+        settings.businessInfo.isCurrentlyOpen = isOpen;
+        await settings.save();
+        
+        const status = settings.getBusinessStatus();
+        io.emit('businessStatusChanged', status);
+        
+        console.log(`Business status updated: ${isOpen ? 'OPEN' : 'CLOSED'} - ${status.reason}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error updating business status:', error);
+  }
+};
+
+// Update business status every minute
+setInterval(updateBusinessStatus, 60000);
+
+// Initial status check
+setTimeout(updateBusinessStatus, 5000);
 
 // Socket connection handling
 io.on('connection', (socket) => {

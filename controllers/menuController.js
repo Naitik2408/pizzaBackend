@@ -123,6 +123,16 @@ const editMenuItem = async (req, res) => {
       return res.status(404).json({ message: 'Menu item not found' });
     }
 
+    // Emit socket event for real-time updates if availability changed
+    const io = req.app.get('io');
+    if (io && available !== undefined) {
+      io.emit('menuItemUpdated', {
+        itemId: updatedMenuItem._id,
+        available: updatedMenuItem.available,
+        type: 'item'
+      });
+    }
+
     res.json(updatedMenuItem);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -159,6 +169,16 @@ const toggleAvailability = async (req, res) => {
 
     menuItem.available = !menuItem.available;
     await menuItem.save();
+
+    // Emit socket event for real-time updates
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('menuItemUpdated', {
+        itemId: menuItem._id,
+        available: menuItem.available,
+        type: 'item'
+      });
+    }
 
     res.json(menuItem);
   } catch (error) {
@@ -198,6 +218,18 @@ const toggleSizeAvailability = async (req, res) => {
     // Toggle the availability
     menuItem.sizeVariations[sizeIndex].available = !menuItem.sizeVariations[sizeIndex].available;
     await menuItem.save();
+
+    // Emit socket event for real-time updates
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('menuItemUpdated', {
+        itemId: menuItem._id,
+        sizeVariations: menuItem.sizeVariations,
+        size: size,
+        available: menuItem.sizeVariations[sizeIndex].available,
+        type: 'size'
+      });
+    }
 
     res.json(menuItem);
   } catch (error) {
@@ -245,6 +277,20 @@ const toggleAddOnAvailability = async (req, res) => {
       !menuItem.addOnGroups[groupIndex].addOns[addOnIndex].available;
     
     await menuItem.save();
+
+    // Emit socket event for real-time updates
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('menuItemUpdated', {
+        itemId: menuItem._id,
+        addOnGroups: menuItem.addOnGroups,
+        groupId: groupId,
+        addOnId: addOnId,
+        available: menuItem.addOnGroups[groupIndex].addOns[addOnIndex].available,
+        type: 'addon'
+      });
+    }
+
     res.json(menuItem);
   } catch (error) {
     res.status(500).json({ message: error.message });

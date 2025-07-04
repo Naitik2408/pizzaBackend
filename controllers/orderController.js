@@ -352,13 +352,25 @@ const placeOrder = asyncHandler(async (req, res) => {
     throw new Error('No order items');
   }
 
+  // Check if business is open before allowing order placement
+  const businessSettings = await Business.findOne().select(
+    'businessInfo taxSettings deliveryCharges minimumOrderValue'
+  );
+
+  if (!businessSettings) {
+    res.status(500);
+    throw new Error('Business settings not found');
+  }
+
+  // Check business status using the model method
+  const businessStatus = businessSettings.getBusinessStatus();
+  if (!businessStatus.isOpen) {
+    res.status(400);
+    throw new Error(`Sorry, we're currently closed. ${businessStatus.reason || 'Please check our operating hours.'}`);
+  }
+
   // Get user details for customer info
   const user = await User.findById(req.user._id);
-
-  // Fetch current business settings to save with the order
-  const businessSettings = await Business.findOne().select(
-    'taxSettings deliveryCharges minimumOrderValue'
-  );
 
   // Calculate tax percentage - use from business settings or calculate from provided values
   let taxPercentage = 0;

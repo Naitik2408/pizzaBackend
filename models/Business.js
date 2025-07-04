@@ -1,6 +1,53 @@
 const mongoose = require('mongoose');
 
 const BusinessSettingsSchema = new mongoose.Schema({
+  // Business Profile Information
+  businessInfo: {
+    name: {
+      type: String,
+      required: true,
+      default: 'Friends Pizza Hut',
+      trim: true
+    },
+    address: {
+      type: String,
+      required: true,
+      default: '123 Foodie Street, Flavor Town',
+      trim: true
+    },
+    phone: {
+      type: String,
+      required: true,
+      default: '+1-234-567-8900',
+      trim: true
+    },
+    email: {
+      type: String,
+      required: false,
+      trim: true,
+      lowercase: true
+    },
+    hours: {
+      monday: { open: String, close: String, isOpen: { type: Boolean, default: true } },
+      tuesday: { open: String, close: String, isOpen: { type: Boolean, default: true } },
+      wednesday: { open: String, close: String, isOpen: { type: Boolean, default: true } },
+      thursday: { open: String, close: String, isOpen: { type: Boolean, default: true } },
+      friday: { open: String, close: String, isOpen: { type: Boolean, default: true } },
+      saturday: { open: String, close: String, isOpen: { type: Boolean, default: true } },
+      sunday: { open: String, close: String, isOpen: { type: Boolean, default: true } }
+    },
+    isCurrentlyOpen: {
+      type: Boolean,
+      default: true
+    },
+    manualOverride: {
+      isActive: { type: Boolean, default: false },
+      status: { type: Boolean, default: true }, // true = open, false = closed
+      reason: { type: String, default: '' }
+    }
+  },
+  
+  // Payment Settings
   upiId: {
     type: String,
     required: true,
@@ -112,6 +159,27 @@ BusinessSettingsSchema.statics.findOrCreate = async function(updateData = {}, us
   
   // Create with default values if no record exists
   const defaultSettings = {
+    businessInfo: {
+      name: 'Friends Pizza Hut',
+      address: '123 Foodie Street, Flavor Town',
+      phone: '+1-234-567-8900',
+      email: 'contact@friendspizzahut.com',
+      hours: {
+        monday: { open: '11:00', close: '23:00', isOpen: true },
+        tuesday: { open: '11:00', close: '23:00', isOpen: true },
+        wednesday: { open: '11:00', close: '23:00', isOpen: true },
+        thursday: { open: '11:00', close: '23:00', isOpen: true },
+        friday: { open: '11:00', close: '23:00', isOpen: true },
+        saturday: { open: '11:00', close: '23:00', isOpen: true },
+        sunday: { open: '11:00', close: '23:00', isOpen: true }
+      },
+      isCurrentlyOpen: true,
+      manualOverride: {
+        isActive: false,
+        status: true,
+        reason: ''
+      }
+    },
     upiId: 'pizzashop@okaxis',
     bankDetails: {
       accountName: 'Pizza Shop',
@@ -159,6 +227,69 @@ BusinessSettingsSchema.methods.calculateTax = function(subtotal) {
   }
   
   return (subtotal * gstPercentage) / 100;
+};
+
+// Method to check if business is currently open
+BusinessSettingsSchema.methods.isBusinessOpen = function() {
+  // Check manual override first
+  if (this.businessInfo.manualOverride.isActive) {
+    return this.businessInfo.manualOverride.status;
+  }
+
+  const now = new Date();
+  const currentDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
+  const daySchedule = this.businessInfo.hours[currentDay];
+
+  if (!daySchedule || !daySchedule.isOpen) {
+    return false;
+  }
+
+  const currentTime = now.getHours() * 60 + now.getMinutes(); // Convert to minutes
+  const openTime = this.parseTimeToMinutes(daySchedule.open);
+  const closeTime = this.parseTimeToMinutes(daySchedule.close);
+
+  // Handle overnight hours (e.g., open until 2 AM next day)
+  if (closeTime < openTime) {
+    return currentTime >= openTime || currentTime <= closeTime;
+  }
+
+  return currentTime >= openTime && currentTime <= closeTime;
+};
+
+// Helper method to parse time string to minutes
+BusinessSettingsSchema.methods.parseTimeToMinutes = function(timeStr) {
+  if (!timeStr) return 0;
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  return hours * 60 + minutes;
+};
+
+// Method to get business status with reason
+BusinessSettingsSchema.methods.getBusinessStatus = function() {
+  const isOpen = this.isBusinessOpen();
+  let reason = '';
+
+  if (this.businessInfo.manualOverride.isActive) {
+    reason = this.businessInfo.manualOverride.reason || 
+             (this.businessInfo.manualOverride.status ? 'Manually opened' : 'Manually closed');
+  } else {
+    const now = new Date();
+    const currentDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
+    const daySchedule = this.businessInfo.hours[currentDay];
+    
+    if (!daySchedule || !daySchedule.isOpen) {
+      reason = 'Closed today';
+    } else if (isOpen) {
+      reason = `Open until ${daySchedule.close}`;
+    } else {
+      reason = `Opens at ${daySchedule.open}`;
+    }
+  }
+
+  return {
+    isOpen,
+    reason,
+    manualOverride: this.businessInfo.manualOverride.isActive
+  };
 };
 
 const BusinessSettings = mongoose.model('BusinessSettings', BusinessSettingsSchema);
