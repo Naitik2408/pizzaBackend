@@ -13,6 +13,7 @@ const deviceTokenRoutes = require('./routes/deviceTokenRoutes');
 const businessRoutes = require('./routes/businessRoutes');
 const offerRoutes = require('./routes/offerRoutes')
 const publicRoutes = require('./routes/publicRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 const errorHandler = require('./middleware/errorHandler');
 
 app.use(express.json());
@@ -36,6 +37,7 @@ app.use('/api/transactions', transactionRoutes); // Add this line
 app.use('/api/offers', offerRoutes);
 app.use('/api/settings', businessRoutes);
 app.use('/api/device', deviceTokenRoutes);
+app.use('/api/notifications', notificationRoutes); // FCM notification test routes
 
 // Add test route for enhanced notifications
 app.post('/api/test/notification', async (req, res) => {

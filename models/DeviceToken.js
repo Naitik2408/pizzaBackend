@@ -17,6 +17,21 @@ const deviceTokenSchema = mongoose.Schema(
       enum: ['ios', 'android', 'web'],
       required: true,
     },
+    tokenType: {
+      type: String,
+      enum: ['fcm', 'expo'],
+      default: 'expo',
+    },
+    deviceInfo: {
+      brand: String,
+      modelName: String,
+      osVersion: String,
+      appVersion: String,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
   },
   {
     timestamps: true,
@@ -25,6 +40,7 @@ const deviceTokenSchema = mongoose.Schema(
 
 // Add index for faster lookups
 deviceTokenSchema.index({ user: 1 });
+deviceTokenSchema.index({ tokenType: 1 });
 
 const DeviceToken = mongoose.model('DeviceToken', deviceTokenSchema);
 module.exports = DeviceToken;
