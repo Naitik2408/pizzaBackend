@@ -25,10 +25,12 @@ const orderSchema = mongoose.Schema(
     orderNumber: {
       type: String,
       unique: true,
+      index: true, // Index for faster search by order number
     },
     customerName: {
       type: String,
-      required: true
+      required: true,
+      index: true, // Index for faster search by customer name
     },
     items: [
       {
@@ -36,7 +38,7 @@ const orderSchema = mongoose.Schema(
           type: mongoose.Schema.Types.ObjectId,
           ref: 'MenuItem',
         },
-        name: { type: String, required: true },
+        name: { type: String, required: true, index: true }, // Index for faster search by item name
         quantity: { type: Number, required: true },
         price: { type: Number, required: true },
         size: { type: String, enum: ['Small', 'Medium', 'Large', 'Not Applicable'] },
@@ -58,6 +60,7 @@ const orderSchema = mongoose.Schema(
       type: String,
       enum: ['Pending', 'Preparing', 'Out for delivery', 'Delivered', 'Cancelled'],
       default: 'Pending',
+      index: true, // Index for faster search and filtering by status
     },
     statusUpdates: [
       {
@@ -109,7 +112,7 @@ const orderSchema = mongoose.Schema(
       paymentId: { type: String }, // Payment gateway payment ID
       signature: { type: String } // Payment gateway signature
     },
-    customerPhone: { type: String, required: true },
+    customerPhone: { type: String, required: true, index: true }, // Index for faster search by phone number
     notes: { type: String },
     estimatedDeliveryTime: { type: Date },
     totalItemsCount: { 

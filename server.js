@@ -83,6 +83,36 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Handle delivery agent status changes
+  socket.on('delivery_status_change', async (data) => {
+    console.log('Received delivery status change:', data);
+    
+    try {
+      // Update the database with the new status
+      const User = require('./models/User');
+      await User.findByIdAndUpdate(
+        data._id,
+        {
+          'deliveryDetails.isOnline': data.isOnline,
+          'deliveryDetails.lastActiveTime': data.lastActiveTime || new Date()
+        },
+        { new: true }
+      );
+      
+      console.log(`Updated database for user ${data.name}: ${data.isOnline ? 'online' : 'offline'}`);
+      
+      // Emit to all admin users
+      socket.to('role:admin').emit('delivery_status_update', data);
+      
+      // Also emit the original event for any listeners
+      socket.to('role:admin').emit('delivery_status_change', data);
+      
+      console.log(`Broadcasted delivery status update for ${data.name} (${data.isOnline ? 'online' : 'offline'})`);
+    } catch (error) {
+      console.error('Error handling delivery status change:', error);
+    }
+  });
+
   // Handle disconnection
   socket.on('disconnect', () => {
     console.log(`Client disconnected: ${socket.id}`);

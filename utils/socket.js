@@ -69,18 +69,32 @@ const emitOrderStatusUpdate = (io, order, triggerType, metadata = {}) => {
   if (!io || !order) return;
   
   try {
-    // Basic order update information
+    // Basic order update information with additional details for the OrderCard
     const orderUpdate = {
       _id: order._id,
       orderNumber: order.orderNumber,
+      id: order.orderNumber || order._id.toString().slice(-6),
       status: order.status,
       updatedAt: new Date(),
+      date: new Date(order.createdAt || Date.now()).toLocaleDateString(),
+      time: new Date(order.createdAt || Date.now()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
       estimatedDeliveryTime: order.estimatedDeliveryTime,
       statusUpdates: order.statusUpdates,
       paymentStatus: order.paymentStatus,
+      paymentMethod: order.paymentMethod,
       amount: order.amount,
-      triggerType,
+      subTotal: order.subTotal || 0,
+      tax: order.tax || 0,
+      deliveryFee: order.deliveryFee || 0,
+      discounts: order.discounts || 0,
+      totalItemsCount: order.totalItemsCount || 
+        (order.items ? order.items.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0),
+      items: order.items || [],
+      customer: order.customerName || metadata.customerName || 'Customer',
       customerName: order.customerName || metadata.customerName,
+      deliveryAgent: order.deliveryAgentName || 'Unassigned',
+      address: order.fullAddress || order.address,
+      triggerType,
       ...metadata
     };
     
@@ -109,14 +123,39 @@ const emitOrderStatusUpdate = (io, order, triggerType, metadata = {}) => {
         time: new Date(order.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
         customerName: order.customerName || 'New Customer',
         amount: order.amount,
+        subTotal: order.subTotal || 0,
+        tax: order.tax || 0,
+        deliveryFee: order.deliveryFee || 0,
+        discounts: order.discounts || 0,
+        totalItemsCount: order.totalItemsCount || 
+          (order.items ? order.items.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0),
         paymentStatus: order.paymentStatus,
         paymentMethod: order.paymentMethod,
         deliveryAddress: order.fullAddress || order.address,
         items: order.items?.map(item => ({
           name: item.name,
-          quantity: item.quantity,
-          price: item.price,
-          _id: item._id
+          quantity: item.quantity || 1,
+          price: item.price || 0,
+          size: item.size || '',
+          foodType: item.foodType || '',
+          basePrice: item.basePrice || item.price || 0,
+          totalItemPrice: item.totalItemPrice || item.price || 0,
+          _id: item._id,
+          customizations: item.customizations || [],
+          addOns: item.addOns || [],
+          toppings: item.toppings || [],
+          specialInstructions: item.specialInstructions || '',
+          hasCustomizations: !!(
+            (item.customizations && item.customizations.length) ||
+            (item.addOns && item.addOns.length) ||
+            (item.toppings && item.toppings.length) ||
+            item.specialInstructions
+          ),
+          customizationCount: (
+            (item.customizations ? item.customizations.length : 0) +
+            (item.addOns ? item.addOns.length : 0) +
+            (item.toppings ? item.toppings.length : 0)
+          )
         })),
         id: order.orderNumber || order._id.toString().slice(-6),
         customer: order.customerName || 'New Customer',

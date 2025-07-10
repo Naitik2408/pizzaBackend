@@ -3,7 +3,8 @@ const User = require('../models/User');
 const Business = require('../models/Business');
 const asyncHandler = require('express-async-handler');
 const { processOrderPayment } = require('./transactionController');
-const { sendNewOrderNotification } = require('../utils/notifications');
+const firebaseNotificationService = require('../services/firebaseNotificationService');
+const unifiedNotificationService = require('../services/unifiedNotificationService');
 // Add socket utility import
 const {
   emitOrderStatusUpdate,
@@ -227,6 +228,50 @@ const getOrdersByQuery = async (query, options = {}) => {
           };
         }
 
+        // Admin format for order list
+        else if (formatType === 'admin') {
+          return {
+            ...baseFormat,
+            customer: order.customerName || 'Customer',
+            deliveryAgent: order.deliveryAgentName || 'Unassigned',
+            totalItemsCount: order.totalItemsCount || (Array.isArray(order.items) ?
+              order.items.reduce((sum, item) => sum + (item.quantity || 1), 0) : 0),
+            items: Array.isArray(order.items) ? order.items.map(item => ({
+              menuItemId: item.menuItemId,
+              name: item.name || "Unnamed Item",
+              quantity: item.quantity || 1,
+              price: item.price || 0,
+              basePrice: item.basePrice || item.price || 0,
+              size: item.size || 'Regular',
+              foodType: item.foodType || 'Not Applicable',
+              image: item.image || '',
+              customizations: Array.isArray(item.customizations) ? item.customizations : [],
+              addOns: Array.isArray(item.addOns) ? item.addOns : [],
+              toppings: Array.isArray(item.toppings) ? item.toppings : [],
+              specialInstructions: item.specialInstructions || '',
+              totalItemPrice: item.totalItemPrice || item.price || 0,
+              hasCustomizations: !!(
+                (item.customizations && item.customizations.length) ||
+                (item.addOns && item.addOns.length) ||
+                (item.toppings && item.toppings.length) ||
+                item.specialInstructions
+              ),
+              customizationCount: (
+                (item.customizations ? item.customizations.length : 0) +
+                (item.addOns ? item.addOns.length : 0) +
+                (item.toppings ? item.toppings.length : 0)
+              )
+            })) : [],
+            subTotal: order.subTotal || 0,
+            tax: order.tax || 0,
+            deliveryFee: order.deliveryFee || 0,
+            discounts: order.discounts || 0,
+            notes: order.notes || '',
+            paymentMethod: order.paymentMethod || 'Not specified',
+            paymentStatus: order.paymentStatus || 'Not specified'
+          };
+        }
+        
         // Default format (minimal)
         else {
           return {
@@ -524,7 +569,23 @@ const placeOrder = asyncHandler(async (req, res) => {
     emitOrderStatusUpdate(io, createdOrder, 'new_order');
   }
 
-  await sendNewOrderNotification(createdOrder);
+  // Send push notification to admin users about the new order
+  try {
+    // Use the unified notification service for new order notifications
+    const notificationResult = await unifiedNotificationService.sendNewOrderNotificationToAdmins({
+      orderId: createdOrder.orderNumber,
+      customerName: user.name,
+      totalAmount: createdOrder.amount,
+    });
+    
+    if (notificationResult.success) {
+      console.log('✅ New order notification sent successfully to admins');
+    } else {
+      console.log('⚠️ Failed to send new order notification:', notificationResult.error);
+    }
+  } catch (error) {
+    console.error('❌ Error sending new order notification:', error);
+  }
 
   res.status(201).json(createdOrder);
 });
@@ -832,6 +893,21 @@ const updateOrderStatus = asyncHandler(async (req, res) => {
       });
     }
 
+    // Send push notification to customer
+    try {
+      await unifiedNotificationService.sendOrderUpdateNotification(
+        updatedOrder.customer,
+        {
+          orderId: updatedOrder.orderNumber,
+          status: updatedOrder.status
+        }
+      );
+      console.log(`📱 Push notification sent for order ${updatedOrder.orderNumber} status update`);
+    } catch (notificationError) {
+      console.error('Failed to send push notification:', notificationError);
+      // Don't fail the order update if notification fails
+    }
+
     // Log the status change
     console.log(`Order ${orderId} status updated to ${status} by ${userRole} ${req.user.name}`);
 
@@ -940,6 +1016,27 @@ const assignDeliveryAgent = asyncHandler(async (req, res) => {
     });
   }
 
+  // Send push notification to delivery agent when order is assigned
+  if (deliveryAgentId && deliveryAgentName !== 'Unassigned') {
+    try {
+      const notificationResult = await unifiedNotificationService.sendOrderAssignmentNotificationToDelivery({
+        orderId: updatedOrder.orderNumber,
+        deliveryAgentId: deliveryAgentId,
+        customerName: updatedOrder.customerName,
+        deliveryAddress: updatedOrder.fullAddress,
+        totalAmount: updatedOrder.amount,
+      });
+      
+      if (notificationResult.success) {
+        console.log(`✅ Delivery assignment notification sent successfully to ${notificationResult.deliveryAgent}`);
+      } else {
+        console.log(`⚠️ Failed to send delivery assignment notification: ${notificationResult.error}`);
+      }
+    } catch (error) {
+      console.error('❌ Error sending delivery assignment notification:', error);
+    }
+  }
+
   res.json({
     success: true,
     order: {
@@ -1042,24 +1139,51 @@ const searchOrders = asyncHandler(async (req, res) => {
       return res.status(400).json({ message: 'Search query is required' });
     }
 
-    // Search by order number, customer name, or item name
+    // Enhanced search query with more detailed criteria for better searching
+    // Attempt to parse order ID if it's numerical to support exact ID matching
+    const possibleOrderId = !isNaN(query) ? parseInt(query) : null;
+    
+    // Search query with proper indexing and advanced search criteria
     const searchQuery = {
       $or: [
+        // Exact match for ID if query is a number
+        ...(possibleOrderId ? [{ orderNumber: possibleOrderId.toString() }] : []),
+        // Case-insensitive partial match for order number (for prefixed IDs)
         { orderNumber: { $regex: query, $options: 'i' } },
+        // Case-insensitive match for customer name
         { customerName: { $regex: query, $options: 'i' } },
-        { 'items.name': { $regex: query, $options: 'i' } }
+        // Case-insensitive match for customer phone
+        { customerPhone: { $regex: query, $options: 'i' } },
+        // Case-insensitive match for any item name in the order
+        { 'items.name': { $regex: query, $options: 'i' } },
+        // Match order by status (if query matches any status)
+        { status: { $regex: query, $options: 'i' } }
       ]
     };
 
+    // Get pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
     const options = {
-      pagination: false,
+      pagination: true,
       formatType: 'admin',
       sort: { createdAt: -1 },
-      limit: 20
+      page,
+      limit,
+      skip
     };
 
     const formattedOrders = await getOrdersByQuery(searchQuery, options);
-    res.json(formattedOrders);
+    
+    // Return response with pagination data for frontend
+    res.json({
+      orders: formattedOrders.orders || formattedOrders,
+      page,
+      pages: formattedOrders.pages || Math.ceil((formattedOrders.total || 0) / limit),
+      total: formattedOrders.total || formattedOrders.length
+    });
   } catch (error) {
     console.error('Error searching orders:', error);
     res.status(500).json({ message: 'Failed to search orders' });

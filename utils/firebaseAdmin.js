@@ -1,187 +1,126 @@
-const fetch = require('node-fetch');
+const admin = require('firebase-admin');
+const path = require('path');
 
-// Firebase project configuration
-const FIREBASE_PROJECT_ID = 'pizza-abe9a';
-const FIREBASE_SERVER_KEY = 'AAAA3YqFqYc:APA91bFJ7hQcLZSq3LiUfGKNzJvqGFLgIqzqvjqM2CfEUfWWQCIjNKKTgJ0G7f-zM6wqTfFKqvwJOANXAZbm-VVEQiYJfWBmLNKHmQSPGaRqjVm5h4fVmGJfWBmLNKHmQSPGaRqjVm5h4fVmGJfWBmLNKHmQSPGaRqjVm5h4fVmGJfWBmLNKHmQSPGaRqjVm5h4f'; // Your Firebase server key
+class FirebaseAdmin {
+  constructor() {
+    this.admin = null;
+    this.initialized = false;
+  }
 
-/**
- * Send FCM notification using Firebase Cloud Messaging API
- */
-const sendFCMNotification = async (tokens, notification, data = {}) => {
-  try {
-    if (!tokens || tokens.length === 0) {
-      return { success: false, message: 'No FCM tokens provided' };
+  // Initialize Firebase Admin SDK
+  initialize() {
+    if (this.initialized) {
+      return this.admin;
     }
 
-    console.log(`🔥 Sending FCM notification to ${tokens.length} tokens`);
-
-    // Prepare the FCM message
-    const message = {
-      notification: {
-        title: notification.title,
-        body: notification.body,
-        icon: 'ic_launcher',
-        sound: 'notification_sound.wav',
-        badge: '1',
-        tag: 'order_alert',
-        color: '#FF6B00',
-        priority: 'high',
-        visibility: 'public',
-        category: 'call',
-        actions: [
-          {
-            action: 'view_order',
-            title: 'View Order',
-            icon: 'ic_view'
-          },
-          {
-            action: 'dismiss',
-            title: 'Dismiss',
-            icon: 'ic_dismiss'
-          }
-        ]
-      },
-      data: {
-        ...data,
-        timestamp: Date.now().toString(),
-        click_action: 'FLUTTER_NOTIFICATION_CLICK'
-      },
-      priority: 'high',
-      content_available: true,
-      android: {
-        priority: 'high',
-        notification: {
-          channel_id: 'critical_order_alerts',
-          priority: 'high',
-          default_sound: false,
-          default_vibrate_timings: false,
-          default_light_settings: false,
-          sound: 'notification_sound.wav',
-          vibrate_timings: ['0s', '1s', '0.5s', '1s'],
-          light_settings: {
-            color: {
-              red: 1.0,
-              green: 0.0,
-              blue: 0.0,
-              alpha: 1.0
-            },
-            light_on_duration: '1s',
-            light_off_duration: '0.5s'
-          },
-          visibility: 'public',
-          local_only: false,
-          sticky: false,
-          actions: [
-            {
-              action: 'view_order',
-              title: 'View Order',
-              icon: 'ic_view'
-            }
-          ]
-        }
-      },
-      apns: {
-        payload: {
-          aps: {
-            alert: {
-              title: notification.title,
-              body: notification.body
-            },
-            sound: 'notification_sound.wav',
-            badge: 1,
-            category: 'ORDER_ALERT',
-            'interruption-level': 'critical',
-            'relevance-score': 1.0,
-            'thread-id': 'order-alerts'
-          }
-        }
+    try {
+      // Check if Firebase app already exists
+      if (admin.apps.length > 0) {
+        console.log('🔥 Firebase app already exists, using existing instance');
+        this.admin = admin.apps[0];
+        this.initialized = true;
+        return this.admin;
       }
-    };
 
-    // Send to each token individually for better error handling
-    const results = await Promise.allSettled(
-      tokens.map(async (token) => {
-        const response = await fetch('https://fcm.googleapis.com/fcm/send', {
-          method: 'POST',
-          headers: {
-            'Authorization': `key=${FIREBASE_SERVER_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            ...message,
-            to: token
-          })
-        });
+      // Path to your Firebase service account key
+      const serviceAccountPath = path.join(__dirname, '../config/firebase-service-account.json');
+      
+      // Check if service account file exists
+      const fs = require('fs');
+      if (!fs.existsSync(serviceAccountPath)) {
+        console.warn('🔥 Firebase service account file not found. Checking environment variables...');
+        
+        // Initialize with environment variables
+        if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
+          const serviceAccount = {
+            type: "service_account",
+            project_id: process.env.FIREBASE_PROJECT_ID,
+            private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+            private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            client_email: process.env.FIREBASE_CLIENT_EMAIL,
+            client_id: process.env.FIREBASE_CLIENT_ID,
+            auth_uri: "https://accounts.google.com/o/oauth2/auth",
+            token_uri: "https://oauth2.googleapis.com/token",
+            auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+            client_x509_cert_url: `https://www.googleapis.com/robot/v1/metadata/x509/${process.env.FIREBASE_CLIENT_EMAIL}`
+          };
 
-        if (!response.ok) {
-          throw new Error(`FCM request failed: ${response.status}`);
+          this.admin = admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount),
+            projectId: process.env.FIREBASE_PROJECT_ID,
+          });
+          
+          console.log('✅ Firebase Admin initialized with environment variables');
+          this.initialized = true;
+        } else {
+          console.error('❌ Firebase environment variables not set. Cannot initialize Firebase.');
+          throw new Error('Firebase configuration missing: environment variables not set');
         }
+      } else {
+        // Initialize with service account file
+        console.log('🔥 Loading service account file:', serviceAccountPath);
+        const serviceAccount = require(serviceAccountPath);
+        console.log('🔥 Service account loaded, project_id:', serviceAccount.project_id);
+        
+        this.admin = admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount),
+          projectId: serviceAccount.project_id,
+        });
+        
+        console.log('✅ Firebase Admin initialized with service account file');
+        this.initialized = true;
+      }
 
-        return await response.json();
-      })
-    );
-
-    const successful = results.filter(r => r.status === 'fulfilled').length;
-    const failed = results.filter(r => r.status === 'rejected').length;
-
-    console.log(`🔥 FCM Results: ${successful} successful, ${failed} failed`);
-
-    return {
-      success: successful > 0,
-      successful,
-      failed,
-      results: results.map(r => r.status === 'fulfilled' ? r.value : { error: r.reason })
-    };
-  } catch (error) {
-    console.error('❌ FCM Error:', error);
-    return { success: false, error: error.message };
+      return this.admin;
+    } catch (error) {
+      console.error('❌ Failed to initialize Firebase Admin:', error);
+      console.error('❌ Error details:', {
+        message: error.message,
+        code: error.code,
+        stack: error.stack?.split('\n')[0]
+      });
+      throw new Error('Firebase initialization failed: ' + error.message);
+    }
   }
-};
 
-/**
- * Send critical order alert via FCM
- */
-const sendCriticalOrderAlert = async (tokens, orderData) => {
-  const notification = {
-    title: '🚨 URGENT: NEW ORDER ALERT! 🚨',
-    body: `${orderData.customerName} placed order #${orderData.orderNumber} - ₹${orderData.amount}. IMMEDIATE ACTION REQUIRED!`
-  };
+  // Get Firebase Admin instance
+  getAdmin() {
+    if (!this.initialized) {
+      return this.initialize();
+    }
+    return this.admin;
+  }
 
-  const data = {
-    type: 'critical_order_alert',
-    orderId: orderData.orderId,
-    orderNumber: orderData.orderNumber,
-    customerName: orderData.customerName,
-    amount: orderData.amount.toString(),
-    urgency: 'critical',
-    requiresAction: 'true',
-    systemAlert: 'true',
-    fullScreen: 'true',
-    callLike: 'true'
-  };
+  // Get Firebase App instance (for compatibility)
+  getApp() {
+    return this.getAdmin();
+  }
 
-  return await sendFCMNotification(tokens, notification, data);
-};
+  // Get messaging instance
+  getMessaging() {
+    const adminApp = this.getAdmin();
+    return adminApp.messaging();
+  }
 
-/**
- * Test FCM notification
- */
-const testFCMNotification = async (tokens) => {
-  const notification = {
-    title: '🧪 Test Notification',
-    body: 'This is a test notification from your Pizza app backend.'
-  };
+  // Get configuration status
+  getStatus() {
+    if (!this.initialized) {
+      return { initialized: false };
+    }
+    return {
+      initialized: true,
+      mode: 'Production'
+    };
+  }
 
-  const data = {
-    type: 'test_notification',
-    timestamp: Date.now().toString()
-  };
+  // Get Firestore instance
+  getFirestore() {
+    const adminApp = this.getAdmin();
+    return adminApp.firestore();
+  }
+}
 
-  return await sendFCMNotification(tokens, notification, data);
-};
+// Singleton instance
+const firebaseAdmin = new FirebaseAdmin();
 
-module.exports = {
-  sendFCMNotification,
-  sendCriticalOrderAlert,
-  testFCMNotification
-};
+module.exports = firebaseAdmin;
