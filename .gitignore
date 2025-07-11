@@ -18,9 +18,6 @@ dist-ssr
 .idea
 .DS_Store
 *.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-# added env files
-*.env
+# Firebase service account
+config/firebase-service-account.json
+.env
