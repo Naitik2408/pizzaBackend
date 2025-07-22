@@ -62,7 +62,7 @@ const getDashboardStats = async (req, res) => {
           paymentStatus: 'Completed'
         }
       },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
+      { $group: { _id: null, total: { $sum: '$amount' }, orders: { $sum: 1 } } },
     ]);
 
     // Previous day revenue
@@ -73,7 +73,7 @@ const getDashboardStats = async (req, res) => {
           paymentStatus: 'Completed'
         }
       },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
+      { $group: { _id: null, total: { $sum: '$amount' }, orders: { $sum: 1 } } },
     ]);
 
     // This week's revenue
@@ -122,19 +122,27 @@ const getDashboardStats = async (req, res) => {
 
     // Calculate growth percentages
     const todayRevenueValue = todayRevenue[0]?.total || 0;
+    const todayOrdersValue = todayRevenue[0]?.orders || 0;
     const previousDayRevenueValue = previousDayRevenue[0]?.total || 0;
+    const previousDayOrdersValue = previousDayRevenue[0]?.orders || 0;
+    
+    const weekRevenueValue = weekRevenue[0]?.total || 0;
+    const monthRevenueValue = monthRevenue[0]?.total || 0;
+    const previousWeekRevenueValue = previousWeekRevenue[0]?.total || 0;
+    const previousMonthRevenueValue = previousMonthRevenue[0]?.total || 0;
+    
     const todayGrowth = previousDayRevenueValue > 0
       ? Math.round(((todayRevenueValue - previousDayRevenueValue) / previousDayRevenueValue) * 100)
       : 0;
-
-    const weekRevenueValue = weekRevenue[0]?.total || 0;
-    const previousWeekRevenueValue = previousWeekRevenue[0]?.total || 0;
+      
+    const todayOrdersGrowth = previousDayOrdersValue > 0
+      ? Math.round(((todayOrdersValue - previousDayOrdersValue) / previousDayOrdersValue) * 100)
+      : 0;
+      
     const weekGrowth = previousWeekRevenueValue > 0
       ? Math.round(((weekRevenueValue - previousWeekRevenueValue) / previousWeekRevenueValue) * 100)
       : 0;
-
-    const monthRevenueValue = monthRevenue[0]?.total || 0;
-    const previousMonthRevenueValue = previousMonthRevenue[0]?.total || 0;
+      
     const monthGrowth = previousMonthRevenueValue > 0
       ? Math.round(((monthRevenueValue - previousMonthRevenueValue) / previousMonthRevenueValue) * 100)
       : 0;
@@ -328,6 +336,10 @@ const getDashboardStats = async (req, res) => {
         weekGrowth,
         monthGrowth
       },
+      ordersData: {
+        today: todayOrdersValue,
+        todayGrowth: todayOrdersGrowth
+      },
       chartData: {
         labels: chartLabels,
         data: chartData
@@ -345,6 +357,163 @@ const getDashboardStats = async (req, res) => {
     res.status(500).json({
       message: 'Error fetching dashboard statistics',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Fetch daily dashboard statistics with per-day breakdown
+const getDailyDashboardStats = async (req, res) => {
+  try {
+    const { days = 7 } = req.query; // Default to 7 days, can be customized
+    const numDays = parseInt(days);
+
+    // Calculate date range
+    const today = new Date();
+    today.setHours(23, 59, 59, 999); // End of today
+
+    const startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - (numDays - 1));
+    startDate.setHours(0, 0, 0, 0); // Start of the period
+
+    // Get daily revenue data
+    const dailyRevenue = await Order.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startDate, $lte: today },
+          paymentStatus: 'Completed'
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+          },
+          revenue: { $sum: '$amount' },
+          orders: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id": 1 } }
+    ]);
+
+    // Get daily new customers
+    const dailyNewCustomers = await User.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startDate, $lte: today },
+          role: 'customer'
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+          },
+          newCustomers: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id": 1 } }
+    ]);
+
+    // Get daily order status breakdown
+    const dailyOrderStatus = await Order.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startDate, $lte: today }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            status: "$status"
+          },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { "_id.date": 1 } }
+    ]);
+
+    // Create array of dates for the period
+    const dateArray = [];
+    for (let i = 0; i < numDays; i++) {
+      const date = new Date(startDate);
+      date.setDate(date.getDate() + i);
+      dateArray.push(date.toISOString().split('T')[0]);
+    }
+
+    // Format the data for each day
+    const dailyStats = dateArray.map(dateStr => {
+      const revenueData = dailyRevenue.find(item => item._id === dateStr);
+      const customerData = dailyNewCustomers.find(item => item._id === dateStr);
+      
+      // Get order status for this day
+      const dayOrderStatus = dailyOrderStatus.filter(item => item._id.date === dateStr);
+      const statusBreakdown = {
+        delivered: 0,
+        preparing: 0,
+        pending: 0,
+        cancelled: 0,
+        'out for delivery': 0
+      };
+
+      dayOrderStatus.forEach(item => {
+        const status = item._id.status.toLowerCase();
+        if (status === 'delivered') statusBreakdown.delivered = item.count;
+        else if (status === 'preparing') statusBreakdown.preparing = item.count;
+        else if (status === 'pending') statusBreakdown.pending = item.count;
+        else if (status === 'cancelled') statusBreakdown.cancelled = item.count;
+        else if (status === 'out for delivery') statusBreakdown['out for delivery'] = item.count;
+      });
+
+      return {
+        date: dateStr,
+        dayName: new Date(dateStr).toLocaleDateString('en-US', { weekday: 'short' }),
+        revenue: revenueData?.revenue || 0,
+        orders: revenueData?.orders || 0,
+        newCustomers: customerData?.newCustomers || 0,
+        orderStatus: statusBreakdown,
+        totalOrders: Object.values(statusBreakdown).reduce((sum, count) => sum + count, 0)
+      };
+    });
+
+    // Calculate summary statistics
+    const totalRevenue = dailyStats.reduce((sum, day) => sum + day.revenue, 0);
+    const totalOrders = dailyStats.reduce((sum, day) => sum + day.orders, 0);
+    const totalNewCustomers = dailyStats.reduce((sum, day) => sum + day.newCustomers, 0);
+    const avgDailyRevenue = totalRevenue / numDays;
+    const avgDailyOrders = totalOrders / numDays;
+
+    res.json({
+      success: true,
+      data: {
+        period: {
+          days: numDays,
+          startDate: startDate.toISOString().split('T')[0],
+          endDate: today.toISOString().split('T')[0]
+        },
+        summary: {
+          totalRevenue,
+          totalOrders,
+          totalNewCustomers,
+          avgDailyRevenue: Math.round(avgDailyRevenue),
+          avgDailyOrders: Math.round(avgDailyOrders)
+        },
+        dailyStats,
+        chartData: {
+          labels: dailyStats.map(day => day.dayName),
+          revenue: dailyStats.map(day => day.revenue),
+          orders: dailyStats.map(day => day.orders),
+          newCustomers: dailyStats.map(day => day.newCustomers)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching daily dashboard stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching daily dashboard statistics',
+      error: error.message
     });
   }
 };
@@ -625,6 +794,7 @@ const updateDeliveryVerification = async (req, res) => {
 module.exports = {
   assignDeliveryAgent,
   getDashboardStats,
+  getDailyDashboardStats,
   getDeliveryAgents,
   getAssignedOrders,
   getAllUsers,

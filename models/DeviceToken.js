@@ -9,7 +9,7 @@ const deviceTokenSchema = new mongoose.Schema({
   token: {
     type: String,
     required: true,
-    unique: true,
+    unique: true, // This already creates an index, so we don't need schema.index({ token: 1 })
   },
   deviceId: {
     type: String,
@@ -39,7 +39,7 @@ const deviceTokenSchema = new mongoose.Schema({
 
 // Index for efficient queries
 deviceTokenSchema.index({ userId: 1, platform: 1 });
-deviceTokenSchema.index({ token: 1 });
+// Note: token field already has unique: true which creates an index automatically
 deviceTokenSchema.index({ isActive: 1 });
 
 // Update lastUsed when token is accessed

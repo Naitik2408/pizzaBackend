@@ -12,14 +12,31 @@ const Razorpay = require('razorpay');
  * @returns {Promise<Object>} Updated order info and transaction if created
  */
 const processOrderPayment = async (orderId, paymentData, user, createTransactionRecord = false) => {
-  // Find the order
-  const order = await Order.findById(orderId);
+  console.log('processOrderPayment called with:', { orderId, paymentMethod: paymentData.paymentMethod, createTransactionRecord });
+  
+  // Find the order - check if orderId is a valid ObjectId format first
+  let order = null;
+  const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(orderId);
+  
+  if (isValidObjectId) {
+    console.log('Searching order by ObjectId:', orderId);
+    order = await Order.findById(orderId).catch(() => null);
+  }
+  
+  if (!order) {
+    console.log('Order not found by ID, trying orderNumber:', orderId);
+    // Try to find by orderNumber
+    order = await Order.findOne({ orderNumber: orderId });
+  }
 
   if (!order) {
+    console.error('Order not found with ID or orderNumber:', orderId);
     const error = new Error('Order not found');
     error.statusCode = 404;
     throw error;
   }
+
+  console.log('Found order:', { id: order._id, orderNumber: order.orderNumber });
 
   // Check permissions based on role
   let isAuthorized = false;
@@ -91,23 +108,42 @@ const processOrderPayment = async (orderId, paymentData, user, createTransaction
   // Create transaction record if requested
   let transaction = null;
   if (createTransactionRecord) {
-    transaction = await Transaction.create({
+    console.log('Creating transaction with payment method:', order.paymentMethod);
+    
+    const transactionData = {
       order: order._id,
       orderNumber: order.orderNumber,
       amount: order.amount,
       paymentMethod: order.paymentMethod,
-      upiDetails: {
-        upiId: paymentData.upiId || 'naitikkumar2408-1@oksbi',
-        merchantName: paymentData.merchantName || 'Pizza Shop',
-        merchantCode: paymentData.merchantCode || 'PIZZASHP001',
-        referenceNumber: upiReference || order.orderNumber,
-      },
       confirmedBy: user._id,
       confirmedByName: user.name,
       customer: order.customer,
       customerName: order.customerName,
       notes: note || `Payment confirmed by ${updatedBy}`
-    });
+    };
+
+    // Add payment-specific details based on method
+    if (order.paymentMethod === 'Online' && paymentData.paymentDetails) {
+      // For Razorpay payments
+      transactionData.razorpayDetails = {
+        paymentId: paymentData.paymentDetails.razorpay_payment_id,
+        orderId: paymentData.paymentDetails.razorpay_order_id,
+        signature: paymentData.paymentDetails.razorpay_signature,
+        verificationStatus: paymentData.paymentDetails.verificationStatus || 'Verified'
+      };
+    } else if (order.paymentMethod === 'UPI' || order.paymentMethod === 'Cash on Delivery') {
+      // For UPI/COD payments
+      transactionData.upiDetails = {
+        upiId: paymentData.upiId || 'naitikkumar2408-1@oksbi',
+        merchantName: paymentData.merchantName || 'Pizza Shop',
+        merchantCode: paymentData.merchantCode || 'PIZZASHP001',
+        referenceNumber: upiReference || order.orderNumber,
+      };
+    }
+
+    console.log('Creating transaction with data:', transactionData);
+    transaction = await Transaction.create(transactionData);
+    console.log('Transaction created successfully:', transaction._id);
   }
 
   return {
@@ -218,50 +254,16 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
     const isAuthentic = expectedSignature === razorpay_signature;
 
     if (isAuthentic) {
-      // Create a transaction record and update order
-      // This uses your existing function with payment details
-      const paymentData = {
-        paymentStatus: 'Completed',
-        paymentMethod: 'Online',
+      // Return verification success with payment details for later transaction creation
+      return res.json({ 
+        verified: true,
         paymentDetails: {
           razorpay_payment_id,
           razorpay_order_id,
           razorpay_signature,
           verificationStatus: 'Verified'
-        },
-        note: 'Payment verified through Razorpay'
-      };
-
-      // Extract orderId from custom notes if available
-      // Or you can pass orderId in request body
-      let orderId = req.body.orderId;
-      if (!orderId) {
-        // Get order details from Razorpay to find your internal orderId
-        const instance = new Razorpay({
-          key_id: process.env.RAZORPAY_KEY_ID,
-          key_secret: process.env.RAZORPAY_KEY_SECRET
-        });
-
-        const razorpayOrder = await instance.orders.fetch(razorpay_order_id);
-        // You could store orderId in notes during order creation
-        if (razorpayOrder.notes && razorpayOrder.notes.orderId) {
-          orderId = razorpayOrder.notes.orderId;
         }
-      }
-
-      if (orderId) {
-        // Use your existing function to process the payment
-        const result = await processOrderPayment(
-          orderId,
-          paymentData,
-          req.user,
-          true // Create a transaction record
-        );
-        return res.json({ verified: true, ...result });
-      } else {
-        // If no orderId is found, just return verification status
-        return res.json({ verified: true });
-      }
+      });
     } else {
       res.status(400).json({ verified: false });
     }
@@ -269,6 +271,50 @@ const verifyRazorpayPayment = asyncHandler(async (req, res) => {
     console.error("Error verifying payment:", error);
     res.status(500).json({
       message: "Payment verification failed",
+      error: error.message
+    });
+  }
+});
+
+// @desc    Create transaction after order is created (for online payments)
+// @route   POST /api/transactions/create-after-order
+// @access  Private
+const createTransactionAfterOrder = asyncHandler(async (req, res) => {
+  try {
+    const { orderId, razorpayDetails } = req.body;
+    
+    console.log('Creating transaction for orderId:', orderId);
+    console.log('Razorpay details received:', razorpayDetails);
+
+    if (!orderId || !razorpayDetails) {
+      console.error('Missing required fields:', { orderId: !!orderId, razorpayDetails: !!razorpayDetails });
+      return res.status(400).json({ message: 'Order ID and Razorpay details are required' });
+    }
+
+    // Create transaction record using the processOrderPayment function
+    const paymentData = {
+      paymentStatus: 'Completed',
+      paymentMethod: 'Online',
+      paymentDetails: razorpayDetails,
+      note: 'Online payment via Razorpay'
+    };
+
+    console.log('Processing payment with data:', paymentData);
+
+    const result = await processOrderPayment(
+      orderId,
+      paymentData,
+      req.user,
+      true // Create a transaction record
+    );
+
+    console.log('Transaction creation result:', result);
+
+    res.json({ success: true, transaction: result.transaction });
+  } catch (error) {
+    console.error("Error creating transaction after order:", error);
+    res.status(500).json({
+      message: "Failed to create transaction record",
       error: error.message
     });
   }
@@ -410,6 +456,7 @@ module.exports = {
   // Razorpay-specific functions
   createRazorpayOrder,
   verifyRazorpayPayment,
+  createTransactionAfterOrder,
 
   // Transaction retrieval functions
   getTransactions,

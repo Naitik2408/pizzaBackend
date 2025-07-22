@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const firebaseNotificationService = require('../services/firebaseNotificationService');
-const expoNotificationService = require('../services/expoNotificationService');
-const UnifiedNotificationService = require('../services/unifiedNotificationService');
+const unifiedNotificationService = require('../services/unifiedNotificationService');
 const firebaseAdmin = require('../utils/firebaseAdmin');
 const { protect: authMiddleware } = require('../middleware/authMiddleware');
 const { apiResponse } = require('../utils/apiResponse');
 const asyncHandler = require('express-async-handler');
+const logger = require('../utils/logger');
 
 // @desc    Get Firebase configuration status
 // @route   GET /api/notifications/status
@@ -14,21 +14,21 @@ const asyncHandler = require('express-async-handler');
 const getFirebaseStatus = asyncHandler(async (req, res) => {
   try {
     const firebaseStatus = firebaseAdmin.getStatus();
-    const expoStatus = expoNotificationService.getStatus();
     
     res.json(apiResponse(true, 'Notification services status retrieved', {
       firebase: {
         ...firebaseStatus,
         timestamp: new Date().toISOString()
       },
-      expo: {
-        ...expoStatus,
+      unified: {
+        status: 'active',
+        service: 'unified',
         timestamp: new Date().toISOString()
       },
-      primary: 'expo' // Expo is the primary service for this app
+      primary: 'unified' // Unified service is the primary service for this app
     }));
   } catch (error) {
-    console.error('Error getting notification services status:', error);
+    logger.error('Error getting notification services status', error);
     res.status(500).json(apiResponse(false, 'Failed to get notification services status', null));
   }
 });
@@ -79,22 +79,22 @@ const sendMultipleNotifications = asyncHandler(async (req, res) => {
       title,
       body,
       timestamp: new Date().toISOString(),
-      service: 'expo'
+      service: 'unified'
     }));
 
-    // Try to send notifications in the background (best effort)
+    // Try to send notifications using unified service
     const notification = { title, body, imageUrl };
     
     try {
-      console.log('🎯 Attempting multiple notifications via Expo service...');
-      const expoResult = await expoNotificationService.sendToUsers(userIds, notification, data);
+      logger.dev('Attempting multiple notifications via unified service...');
+      const result = await unifiedNotificationService.sendToUsers(userIds, notification, data);
       
-      if (expoResult.success) {
-        console.log('✅ Expo multiple notifications sent successfully');
+      if (result.success) {
+        logger.success('Unified notifications sent successfully');
         return;
       }
       
-      console.log('🔥 Fallback to Firebase notification service...');
+      logger.warn('Unified notification service had issues, trying Firebase directly...');
       const firebaseResult = await firebaseNotificationService.sendToUsers(userIds, notification, data);
       
       if (firebaseResult.success) {

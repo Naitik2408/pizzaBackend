@@ -195,6 +195,18 @@ const menuItemSchema = mongoose.Schema(
   }
 );
 
+// Performance indexes for optimized queries
+menuItemSchema.index({ name: 'text', description: 'text', category: 'text' }); // Text search
+menuItemSchema.index({ category: 1, available: 1 }); // Category filter with availability
+menuItemSchema.index({ foodType: 1, available: 1 }); // Food type filter with availability
+menuItemSchema.index({ price: 1 }); // Price sorting
+menuItemSchema.index({ popular: -1, rating: -1, available: 1 }); // Popular items
+menuItemSchema.index({ available: 1, popular: -1, rating: -1 }); // Available popular items
+menuItemSchema.index({ createdAt: -1 }); // Newest items
+menuItemSchema.index({ rating: -1, ratingCount: -1 }); // Best rated items
+menuItemSchema.index({ sizeType: 1, available: 1 }); // Size type filter
+menuItemSchema.index({ 'sizeVariations.size': 1, available: 1 }); // Size variation queries
+
 // Pre-save hook to ensure data consistency
 menuItemSchema.pre('save', function(next) {
   // Set hasMultipleSizes based on sizeType

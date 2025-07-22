@@ -5,6 +5,7 @@ const {
   // updateOrderStatus,
   assignDeliveryAgent,
   getDashboardStats,
+  getDailyDashboardStats, // Add this new function
   getDeliveryAgents,
   getAllUsers,          // Add these new controller functions
   updateUserRole,
@@ -28,11 +29,14 @@ const router = express.Router();
 // Assign delivery agent
 router.put('/orders/:id/assign-agent', protect, admin, assignDeliveryAgent);
 
-// Add this route to get all delivery agents
-router.get('/delivery-agents', protect, admin, getDeliveryAgents);
-
 // Fetch dashboard statistics
 router.get('/stats', protect, admin, getDashboardStats);
+
+// Fetch daily dashboard statistics with per-day breakdown
+router.get('/stats/daily', protect, admin, getDailyDashboardStats);
+
+// Add this route to get all delivery agents
+router.get('/delivery-agents', protect, admin, getDeliveryAgents);
 
 // User management routes
 router.get('/users', protect, admin, getAllUsers);

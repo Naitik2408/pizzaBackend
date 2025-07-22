@@ -380,6 +380,49 @@ class FirebaseNotificationService {
       return { success: false, error: error.message };
     }
   }
+
+  // Send order assignment notification to delivery agent
+  async sendOrderAssignmentNotificationToDelivery(orderData) {
+    try {
+      const DeviceToken = require('../models/DeviceToken');
+      
+      const tokens = await DeviceToken.findActiveTokensForUser(orderData.deliveryAgentId);
+      
+      if (tokens.length === 0) {
+        console.warn(`No active device tokens found for delivery agent: ${orderData.deliveryAgentId}`);
+        return { success: false, error: 'No active delivery agent tokens found' };
+      }
+
+      const notification = {
+        title: '🚚 New Delivery Assignment!',
+        body: `Order #${orderData.orderId} assigned to you - ₹${orderData.totalAmount}`,
+      };
+
+      const data = {
+        type: 'delivery_assignment',
+        orderId: orderData.orderId.toString(),
+        customerName: orderData.customerName,
+        deliveryAddress: orderData.deliveryAddress,
+        amount: orderData.totalAmount.toString(),
+        timestamp: Date.now().toString(),
+      };
+
+      const tokenStrings = tokens.map(t => t.token);
+      const result = await this.sendToMultipleDevices(tokenStrings, notification, data);
+      
+      console.log(`✅ Delivery assignment notification sent to ${result.successCount || 0} devices`);
+      
+      return {
+        success: true,
+        tokenCount: tokens.length,
+        successCount: result.successCount || 0,
+        failureCount: result.failureCount || 0,
+      };
+    } catch (error) {
+      console.error('❌ Failed to send delivery assignment notification:', error);
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 // Singleton instance

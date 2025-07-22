@@ -2,6 +2,8 @@
  * Utility for Socket.IO operations
  */
 
+const logger = require('./logger');
+
 /**
  * Emit delivery agent status update
  * @param {Object} io - Socket.IO instance
@@ -29,9 +31,9 @@ const emitDeliveryStatusUpdate = (io, user) => {
       lastActiveTime: user.deliveryDetails?.lastActiveTime 
     });
     
-    console.log(`Emitted delivery status update for ${user.name}`);
+    logger.socket('delivery_status_update', `Emitted delivery status update for ${user.name}`);
   } catch (error) {
-    console.error('Socket emission error:', error);
+    logger.error('Socket emission error', error);
   }
 };
 
@@ -54,7 +56,7 @@ const emitAllDeliveryAgentsStatus = (io, agents) => {
     
     io.to('role:admin').emit('delivery_agents_status', formattedAgents);
   } catch (error) {
-    console.error('Socket bulk emission error:', error);
+    logger.error('Socket bulk emission error', error);
   }
 };
 
@@ -171,12 +173,12 @@ const emitOrderStatusUpdate = (io, order, triggerType, metadata = {}) => {
       // IMPORTANT: Also emit to admins for orders page real-time updates
       io.to('role:admin').emit('new_order_placed', newOrderData);
       
-      console.log(`Emitted new_order_placed to admin and delivery roles`);
+      logger.socket('new_order_placed', `Emitted new_order_placed to admin and delivery roles`);
     }
 
-    console.log(`Emitted order update for order ${order.orderNumber || order._id}, type: ${triggerType}`);
+    logger.socket('order_update', `Emitted order update for order ${order.orderNumber || order._id}, type: ${triggerType}`);
   } catch (error) {
-    console.error('Socket order emission error:', error);
+    logger.error('Socket order emission error', error);
   }
 };
 
@@ -247,9 +249,9 @@ const emitDeliveryAgentAssignment = (io, order, metadata = {}) => {
       });
     }
     
-    console.log(`Emitted delivery assignment update for order ${order.orderNumber || order._id} to ${order.deliveryAgentName || 'Unassigned'}`);
+    logger.socket('delivery_assignment', `Emitted delivery assignment update for order ${order.orderNumber || order._id} to ${order.deliveryAgentName || 'Unassigned'}`);
   } catch (error) {
-    console.error('Socket delivery assignment emission error:', error);
+    logger.error('Socket delivery assignment emission error', error);
   }
 };
 
@@ -286,9 +288,9 @@ const emitPaymentUpdate = (io, order) => {
       io.to(`user:${order.customer}`).emit('my_payment_update', paymentUpdate);
     }
     
-    console.log(`Emitted payment update for order ${order.orderNumber || order._id}, status: ${order.paymentStatus}`);
+    logger.socket('payment_update', `Emitted payment update for order ${order.orderNumber || order._id}, status: ${order.paymentStatus}`);
   } catch (error) {
-    console.error('Socket payment emission error:', error);
+    logger.error('Socket payment emission error', error);
   }
 };
 

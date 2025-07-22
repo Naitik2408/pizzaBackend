@@ -1,40 +1,177 @@
 const MenuItem = require('../models/MenuItem');
 
-// Update getMenuItems to support sizeType filtering
+// Enhanced getMenuItems with pagination, search, and performance optimizations
 const getMenuItems = async (req, res) => {
   try {
-    const { category, foodType, size, sizeType } = req.query;
+    const { 
+      page = 1, 
+      limit = 20, 
+      category, 
+      foodType, 
+      size, 
+      sizeType,
+      search, 
+      sortBy = 'popular',
+      minPrice,
+      maxPrice,
+      popular,
+      available = 'true' // Default to showing only available items
+    } = req.query;
 
-    // Build the query object
+    // Build optimized query with indexes
     const query = {};
+    const sort = {};
 
+    // Search optimization with text search
+    if (search && search.trim()) {
+      query.$or = [
+        { name: { $regex: search.trim(), $options: 'i' } },
+        { description: { $regex: search.trim(), $options: 'i' } },
+        { category: { $regex: search.trim(), $options: 'i' } }
+      ];
+    }
+
+    // Category filter
     if (category && category !== 'All') {
       query.category = category;
     }
 
+    // Food type filter
     if (foodType && foodType !== 'All') {
       query.foodType = foodType;
     }
 
-    // Add sizeType filtering
+    // Available filter
+    if (available !== 'all') {
+      query.available = available === 'true';
+    }
+
+    // Popular filter
+    if (popular === 'true') {
+      query.popular = true;
+    }
+
+    // Size type filtering
     if (sizeType && ['single', 'multiple'].includes(sizeType)) {
       query.sizeType = sizeType;
     }
 
-    // Filter by size if specified
+    // Size filtering
     if (size && size !== 'All' && size !== 'Not Applicable') {
       query.$or = [
-        // Match items with this size in size variations
         { 'sizeVariations.size': size },
-        // Or match single-size items with this size
         { size: size, sizeType: 'single' }
       ];
     }
 
-    const menuItems = await MenuItem.find(query);
-    res.json(menuItems);
+    // Price range filter
+    if (minPrice || maxPrice) {
+      query.price = {};
+      if (minPrice && !isNaN(parseFloat(minPrice))) {
+        query.price.$gte = parseFloat(minPrice);
+      }
+      if (maxPrice && !isNaN(parseFloat(maxPrice))) {
+        query.price.$lte = parseFloat(maxPrice);
+      }
+    }
+
+    // Sort optimization
+    switch (sortBy) {
+      case 'priceAsc':
+        sort.price = 1;
+        break;
+      case 'priceDesc':
+        sort.price = -1;
+        break;
+      case 'rating':
+        sort.rating = -1;
+        sort.ratingCount = -1;
+        break;
+      case 'name':
+        sort.name = 1;
+        break;
+      case 'newest':
+        sort.createdAt = -1;
+        break;
+      case 'popular':
+      default:
+        sort.popular = -1;
+        sort.rating = -1;
+        sort.ratingCount = -1;
+        break;
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = Math.min(parseInt(limit, 10), 50); // Max 50 items per page
+    const skip = (pageNum - 1) * limitNum;
+
+    // Optimized projection - only essential fields for list view
+    const listProjection = {
+      name: 1,
+      description: 1,
+      price: 1,
+      category: 1,
+      image: 1,
+      foodType: 1,
+      isVeg: 1,
+      available: 1,
+      popular: 1,
+      rating: 1,
+      ratingCount: 1,
+      hasMultipleSizes: 1,
+      hasAddOns: 1,
+      size: 1,
+      sizeVariations: 1,
+      addOnGroups: 1,
+      createdAt: 1,
+      updatedAt: 1
+    };
+
+    // Execute queries in parallel for better performance
+    const [items, total] = await Promise.all([
+      MenuItem.find(query)
+        .select(listProjection)
+        .sort(sort)
+        .skip(skip)
+        .limit(limitNum)
+        .lean(), // Use lean() for 30-40% better performance
+      MenuItem.countDocuments(query)
+    ]);
+
+    // Calculate pagination metadata
+    const totalPages = Math.ceil(total / limitNum);
+    const hasMore = pageNum < totalPages;
+    const hasPrevious = pageNum > 1;
+
+    res.json({
+      items,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: totalPages,
+        hasMore,
+        hasPrevious,
+        isFirstPage: pageNum === 1,
+        isLastPage: pageNum === totalPages
+      },
+      filters: {
+        category,
+        foodType,
+        search,
+        sortBy,
+        minPrice,
+        maxPrice,
+        available
+      }
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Error in getMenuItems:', error);
+    res.status(500).json({ 
+      message: error.message,
+      items: [],
+      pagination: { page: 1, limit: 20, total: 0, pages: 0, hasMore: false }
+    });
   }
 };
 
@@ -344,6 +481,120 @@ const getAvailableSizes = async (req, res) => {
   }
 };
 
+// Get search suggestions for autocomplete
+const getSearchSuggestions = async (req, res) => {
+  try {
+    const { query } = req.query;
+    
+    if (!query || query.length < 2) {
+      return res.json({ suggestions: [] });
+    }
+
+    const searchRegex = new RegExp(query.trim(), 'i');
+
+    // Get suggestions from menu items and categories
+    const suggestions = await MenuItem.aggregate([
+      {
+        $match: {
+          $or: [
+            { name: searchRegex },
+            { category: searchRegex },
+            { description: searchRegex }
+          ],
+          available: true
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          names: { $addToSet: '$name' },
+          categories: { $addToSet: '$category' }
+        }
+      },
+      {
+        $project: {
+          suggestions: {
+            $slice: [
+              {
+                $filter: {
+                  input: { $concatArrays: ['$names', '$categories'] },
+                  cond: { $regexMatch: { input: '$$this', regex: searchRegex } }
+                }
+              },
+              10
+            ]
+          }
+        }
+      }
+    ]);
+
+    const results = suggestions[0]?.suggestions || [];
+    res.json({ suggestions: results });
+  } catch (error) {
+    console.error('Error getting search suggestions:', error);
+    res.status(500).json({ suggestions: [], message: error.message });
+  }
+};
+
+// Get popular items for home screen
+const getPopularItems = async (req, res) => {
+  try {
+    const { limit = 6 } = req.query;
+    
+    const popularItems = await MenuItem.find({
+      popular: true,
+      available: true
+    })
+    .select('name description price image category foodType rating ratingCount')
+    .sort({ rating: -1, ratingCount: -1 })
+    .limit(parseInt(limit, 10))
+    .lean();
+
+    res.json(popularItems);
+  } catch (error) {
+    console.error('Error getting popular items:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get menu categories with item counts
+const getMenuCategories = async (req, res) => {
+  try {
+    const categories = await MenuItem.aggregate([
+      {
+        $match: { available: true }
+      },
+      {
+        $group: {
+          _id: '$category',
+          count: { $sum: 1 },
+          avgRating: { $avg: '$rating' },
+          hasVegOptions: { $sum: { $cond: [{ $eq: ['$foodType', 'Veg'] }, 1, 0] } },
+          hasNonVegOptions: { $sum: { $cond: [{ $eq: ['$foodType', 'Non-Veg'] }, 1, 0] } }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          category: '$_id',
+          count: 1,
+          avgRating: { $round: ['$avgRating', 1] },
+          hasVegOptions: { $gt: ['$hasVegOptions', 0] },
+          hasNonVegOptions: { $gt: ['$hasNonVegOptions', 0] }
+        }
+      },
+      {
+        $sort: { count: -1 }
+      }
+    ]);
+
+    res.json({ categories });
+  } catch (error) {
+    console.error('Error getting menu categories:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 module.exports = {
   getMenuItems,
   addMenuItem,
@@ -353,5 +604,8 @@ module.exports = {
   toggleSizeAvailability,
   toggleAddOnAvailability, // New function
   rateMenuItem,
-  getAvailableSizes
+  getAvailableSizes,
+  getSearchSuggestions,
+  getPopularItems,
+  getMenuCategories
 };
